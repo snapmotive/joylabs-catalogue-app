@@ -149,6 +149,13 @@ class ReorderService {
     try {
       logger.info('[ReorderService]', '🔄 Manual sync triggered by user');
 
+      // Check AppSync connectivity before attempting sync
+      const canConnectToAppSync = await this.testAppSyncConnectivity();
+      if (!canConnectToAppSync) {
+        logger.warn('[ReorderService]', 'Cannot connect to AppSync - manual sync skipped');
+        throw new Error('Cannot connect to server. Please check your internet connection and try again.');
+      }
+
       // 🚨 EMERGENCY FIX: Warn user about potential data loss
       if (this.pendingSyncItems.length > 0) {
         logger.warn('[ReorderService]', `⚠️ WARNING: ${this.pendingSyncItems.length} pending items will be synced to server first`);
@@ -1632,43 +1639,37 @@ class ReorderService {
         return false;
       }
 
-      // User is authenticated, now test network connectivity with a simple GraphQL query
-      try {
-        await this.client.graphql({
-          query: queries.listReorderItems,
-          variables: { limit: 1 }
-        });
-
-        // Both authentication and network are working
-        this.isOfflineMode = false;
-        logger.info('[ReorderService]', 'User authenticated and online', {
-          userId: user.userId || user.username
-        });
-        return true;
-
-      } catch (networkError: any) {
-        // User is authenticated but network/AppSync is not working
-        if (networkError?.name === 'NoSignedUser' || networkError?.underlyingError?.name === 'NotAuthorizedException') {
-          // This shouldn't happen since we already checked authentication, but handle it
-          this.isOfflineMode = true;
-          logger.warn('[ReorderService]', 'Authentication error in network test - switching to offline mode');
-          return false;
-        } else {
-          // Network error - user is authenticated but can't reach server
-          this.isOfflineMode = true;
-          logger.warn('[ReorderService]', 'User authenticated but network unavailable - offline mode', {
-            error: networkError.message,
-            userId: user.userId || user.username
-          });
-          return false;
-        }
-      }
+      // CRITICAL FIX: Don't test AppSync connectivity during auth check
+      // This was causing false offline mode when user is authenticated but AppSync has issues
+      // Instead, just check authentication and assume online if authenticated
+      this.isOfflineMode = false;
+      logger.info('[ReorderService]', 'User authenticated - assuming online mode', {
+        userId: user.userId || user.username
+      });
+      return true;
 
     } catch (authError: any) {
       // Authentication check failed
       this.isOfflineMode = true;
       logger.info('[ReorderService]', 'Authentication check failed - switching to offline mode', {
         error: authError.message
+      });
+      return false;
+    }
+  }
+
+  // Test AppSync connectivity separately (only when needed for sync operations)
+  private async testAppSyncConnectivity(): Promise<boolean> {
+    try {
+      await this.client.graphql({
+        query: queries.listReorderItems,
+        variables: { limit: 1 }
+      });
+      return true;
+    } catch (error: any) {
+      logger.warn('[ReorderService]', 'AppSync connectivity test failed', {
+        error: error.message,
+        errorName: error.name
       });
       return false;
     }
