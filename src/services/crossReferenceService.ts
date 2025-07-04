@@ -74,7 +74,7 @@ class CrossReferenceService {
 
       let itemRow;
       try {
-        itemRow = await db.getFirstAsync<any>(itemQuery, itemId);
+        itemRow = await db.getFirstAsync<any>(itemQuery, [itemId]);
       } catch (itemQueryError) {
         // CRITICAL FIX: Graceful error handling for offline/unauthenticated users
         if (itemQueryError?.message?.includes('no such table:') || itemQueryError?.code === 'ERR_INTERNAL_SQLITE_ERROR') {
@@ -95,7 +95,7 @@ class CrossReferenceService {
         // Let's also check if the item exists at all
         const existsCheck = await db.getFirstAsync<any>(
           'SELECT id, name, is_deleted FROM catalog_items WHERE id = ?',
-          itemId
+          [itemId]
         );
 
         return null;
@@ -119,7 +119,7 @@ class CrossReferenceService {
 
       let variationRow;
       try {
-        variationRow = await db.getFirstAsync<any>(variationQuery, itemId);
+        variationRow = await db.getFirstAsync<any>(variationQuery, [itemId]);
       } catch (variationQueryError) {
         // CRITICAL FIX: Graceful error handling for offline/unauthenticated users
         if (variationQueryError?.message?.includes('no such table:') || variationQueryError?.code === 'ERR_INTERNAL_SQLITE_ERROR') {
@@ -227,7 +227,7 @@ class CrossReferenceService {
             const db = await getDatabase();
             const categoryRow = await db.getFirstAsync<{ name: string }>(
               'SELECT name FROM categories WHERE id = ? AND is_deleted = 0',
-              row.category_id
+              [row.category_id]
             );
             if (categoryRow) {
               categoryName = categoryRow.name;
@@ -279,7 +279,7 @@ class CrossReferenceService {
             const db = await getDatabase();
             const categoryRow = await db.getFirstAsync<{ name: string }>(
               'SELECT name FROM categories WHERE id = ? AND is_deleted = 0',
-              categoryId
+              [categoryId]
             );
             if (categoryRow) {
               categoryName = categoryRow.name;
@@ -330,7 +330,7 @@ class CrossReferenceService {
            FROM catalog_items ci
            LEFT JOIN categories c ON ci.category_id = c.id AND c.is_deleted = 0
            WHERE ci.id = ? AND ci.is_deleted = 0`,
-          itemId
+          [itemId]
         );
 
         if (simpleRow) {
@@ -421,7 +421,7 @@ class CrossReferenceService {
       // Note: Table may exist from previous sign-ins, but specific items might be missing
       const row = await db.getFirstAsync<any>(
         'SELECT * FROM team_data WHERE item_id = ?',
-        itemId
+        [itemId]
       );
 
       if (!row) {
