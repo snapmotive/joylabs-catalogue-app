@@ -6,6 +6,95 @@ import { imageService } from '../services/imageService';
  * Test utility to verify image sync functionality
  * This can be called from debug menus to test image syncing
  */
+/**
+ * Test specific item for image sync issues
+ */
+export async function testSpecificItemImageSync(itemId: string): Promise<{
+  success: boolean;
+  itemFound: boolean;
+  itemData: any;
+  imageIds: string[];
+  imagesInDb: any[];
+  error?: string;
+}> {
+  try {
+    logger.info('TestImageSync', `Testing specific item: ${itemId}`);
+
+    const db = await modernDb.getDatabase();
+
+    // 1. Get the item from database
+    const item = await db.getFirstAsync<{
+      id: string;
+      name: string;
+      data_json: string;
+    }>(`
+      SELECT id, name, data_json
+      FROM catalog_items
+      WHERE id = ? AND is_deleted = 0
+    `, [itemId]);
+
+    if (!item) {
+      return {
+        success: false,
+        itemFound: false,
+        itemData: null,
+        imageIds: [],
+        imagesInDb: [],
+        error: `Item ${itemId} not found in database`
+      };
+    }
+
+    // 2. Parse item data and check for image_ids
+    const itemData = JSON.parse(item.data_json);
+    const imageIds = itemData.item_data?.image_ids || [];
+
+    logger.info('TestImageSync', `Item ${item.name} analysis:`, {
+      hasItemData: !!itemData.item_data,
+      hasImageIds: !!itemData.item_data?.image_ids,
+      imageIdsLength: imageIds.length,
+      imageIds: imageIds,
+      fullItemData: itemData
+    });
+
+    // 3. Check if these image IDs exist in images table
+    let imagesInDb = [];
+    if (imageIds.length > 0) {
+      const placeholders = imageIds.map(() => '?').join(',');
+      imagesInDb = await db.getAllAsync<{
+        id: string;
+        name: string;
+        url: string;
+        caption: string;
+      }>(`
+        SELECT id, name, url, caption
+        FROM images
+        WHERE id IN (${placeholders}) AND is_deleted = 0
+      `, imageIds);
+
+      logger.info('TestImageSync', `Found ${imagesInDb.length} images in database for item ${item.name}:`, imagesInDb);
+    }
+
+    return {
+      success: true,
+      itemFound: true,
+      itemData: itemData,
+      imageIds: imageIds,
+      imagesInDb: imagesInDb
+    };
+
+  } catch (error) {
+    logger.error('TestImageSync', 'Specific item test failed', error);
+    return {
+      success: false,
+      itemFound: false,
+      itemData: null,
+      imageIds: [],
+      imagesInDb: [],
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
 export async function testImageSync(): Promise<{
   success: boolean;
   imageCount: number;

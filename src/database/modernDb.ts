@@ -852,6 +852,17 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
             );
             break;
           case 'IMAGE':
+            // CRITICAL DEBUG: Log IMAGE object to understand structure
+            logger.info('Database::IMAGE', 'Processing IMAGE object', {
+              id: obj.id,
+              hasImageData: !!obj.image_data,
+              imageDataKeys: obj.image_data ? Object.keys(obj.image_data) : [],
+              name: obj.image_data?.name,
+              url: obj.image_data?.url,
+              caption: obj.image_data?.caption,
+              fullObject: obj
+            });
+
             // CRITICAL FIX: Square IMAGE objects might not have direct URLs
             // Check multiple possible URL fields and construct URL if needed
             let imageUrl = obj.image_data?.url;
@@ -878,6 +889,16 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
               obj.type, // Store IMAGE type
               dataJson
             );
+
+            // CRITICAL: Check if this image belongs to any item and update item's image_ids
+            // Square might not populate image_ids in ITEM objects, so we need to do it ourselves
+            if (!isDeleted && obj.image_data) {
+              try {
+                await this.linkImageToItem(obj.id, obj.image_data);
+              } catch (linkError) {
+                logger.warn('Database::IMAGE', 'Failed to link image to item', { imageId: obj.id, error: linkError });
+              }
+            }
 
             // CRITICAL FIX: Only notify data change listeners if NOT in bulk sync mode
             try {
@@ -907,6 +928,72 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
   } finally {
     // Finalize prepared statements
     await Promise.all(Object.values(statements).map(stmt => stmt.finalizeAsync()));
+  }
+}
+
+/**
+ * Link an image to its parent item by updating the item's image_ids array
+ * This is needed because Square might not populate image_ids in ITEM objects
+ */
+async function linkImageToItem(imageId: string, imageData: any): Promise<void> {
+  try {
+    const db = await getDatabase();
+
+    // Look for the image's parent item in the full object data
+    // Square images might have object_id or other references
+    let parentItemId = null;
+
+    // Check if image data has object_id (common Square pattern)
+    if (imageData.object_id) {
+      parentItemId = imageData.object_id;
+    }
+
+    // If no direct reference, search for items that might reference this image
+    // This is a fallback - we'll search for items that were updated around the same time
+    if (!parentItemId) {
+      logger.debug('Database::linkImageToItem', 'No direct item reference found for image', { imageId });
+      return;
+    }
+
+    logger.info('Database::linkImageToItem', 'Linking image to item', { imageId, parentItemId });
+
+    // Get the current item data
+    const itemRow = await db.getFirstAsync<{ id: string; data_json: string }>(
+      'SELECT id, data_json FROM catalog_items WHERE id = ? AND is_deleted = 0',
+      [parentItemId]
+    );
+
+    if (!itemRow) {
+      logger.warn('Database::linkImageToItem', 'Parent item not found', { imageId, parentItemId });
+      return;
+    }
+
+    // Parse current item data
+    const itemData = JSON.parse(itemRow.data_json || '{}');
+    const currentImageIds = itemData.item_data?.image_ids || [];
+
+    // Add image ID if not already present
+    if (!currentImageIds.includes(imageId)) {
+      if (!itemData.item_data) {
+        itemData.item_data = {};
+      }
+      itemData.item_data.image_ids = [...currentImageIds, imageId];
+
+      // Update the item
+      await db.runAsync(
+        'UPDATE catalog_items SET data_json = ?, updated_at = ? WHERE id = ?',
+        [JSON.stringify(itemData), new Date().toISOString(), parentItemId]
+      );
+
+      logger.info('Database::linkImageToItem', 'Successfully linked image to item', {
+        imageId,
+        parentItemId,
+        totalImages: itemData.item_data.image_ids.length
+      });
+    }
+
+  } catch (error) {
+    logger.error('Database::linkImageToItem', 'Failed to link image to item', { imageId, error });
   }
 }
 
