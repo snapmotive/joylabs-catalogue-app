@@ -852,13 +852,28 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
             );
             break;
           case 'IMAGE':
+            // CRITICAL FIX: Square IMAGE objects might not have direct URLs
+            // Check multiple possible URL fields and construct URL if needed
+            let imageUrl = obj.image_data?.url;
+
+            // If no direct URL, try to construct from Square CDN pattern
+            if (!imageUrl && obj.image_data?.id) {
+              // Square images are typically served from their CDN
+              imageUrl = `https://items-images-production.s3.us-west-2.amazonaws.com/files/${obj.image_data.id}/original.jpeg`;
+            }
+
+            // Fallback: use the object ID if no image_data.id
+            if (!imageUrl && obj.id) {
+              imageUrl = `https://items-images-production.s3.us-west-2.amazonaws.com/files/${obj.id}/original.jpeg`;
+            }
+
              await statements.IMAGE.executeAsync(
               obj.id,
               obj.updated_at,
               versionStr,
               isDeleted,
               obj.image_data?.name,
-              obj.image_data?.url,
+              imageUrl, // Use constructed URL
               obj.image_data?.caption,
               obj.type, // Store IMAGE type
               dataJson
