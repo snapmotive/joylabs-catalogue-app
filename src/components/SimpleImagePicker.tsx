@@ -200,11 +200,7 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
       // The actual scale relative to the original image
       const totalScale = currentScale;
 
-      // Calculate what part of the original image is visible in the crop window
-      // At 1x zoom, the image fills the crop window
-      // At 2x zoom, we see half the image width/height
-      const visibleOriginalWidth = originalWidth / totalScale;
-      const visibleOriginalHeight = originalHeight / totalScale;
+      // Calculate crop center and size for square crop window
 
       // Calculate crop center in original image coordinates
       // translateX/Y are in display coordinates, convert to original coordinates
@@ -214,30 +210,34 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
       const cropCenterX = (originalWidth / 2) + translateXInOriginal;
       const cropCenterY = (originalHeight / 2) + translateYInOriginal;
 
-      // Calculate crop area in original coordinates
-      const originalCropX = cropCenterX - (visibleOriginalWidth / 2);
-      const originalCropY = cropCenterY - (visibleOriginalHeight / 2);
-      const originalCropWidth = visibleOriginalWidth;
-      const originalCropHeight = visibleOriginalHeight;
+      // Calculate crop area directly for square crop window
 
-      // Ensure crop area is within bounds
-      const finalCropX = Math.max(0, Math.min(originalCropX, originalWidth - originalCropWidth));
-      const finalCropY = Math.max(0, Math.min(originalCropY, originalHeight - originalCropHeight));
-      const finalCropWidth = Math.min(originalCropWidth, originalWidth - finalCropX);
-      const finalCropHeight = Math.min(originalCropHeight, originalHeight - finalCropY);
+      // CRITICAL FIX: Crop exactly what the user sees in the crop window
+      // The crop window is always square (CROP_SIZE x CROP_SIZE)
+      // So we need to crop a square area from the original image that corresponds to this window
 
-      // Ensure we crop a square area to maintain aspect ratio
-      const cropSize = Math.min(finalCropWidth, finalCropHeight);
+      // Calculate the size of the square crop area in original image coordinates
+      const cropWindowSize = CROP_SIZE; // The crop window is always square
+      const originalCropSize = cropWindowSize / currentScale; // Size in original image coordinates
+
+      // Center the square crop area
+      const squareCropX = cropCenterX - (originalCropSize / 2);
+      const squareCropY = cropCenterY - (originalCropSize / 2);
+
+      // Ensure the square crop area is within bounds
+      const boundedCropX = Math.max(0, Math.min(squareCropX, originalWidth - originalCropSize));
+      const boundedCropY = Math.max(0, Math.min(squareCropY, originalHeight - originalCropSize));
+      const boundedCropSize = Math.min(originalCropSize, originalWidth - boundedCropX, originalHeight - boundedCropY);
 
       const croppedImage = await ImageManipulator.manipulateAsync(
         selectedImageUri,
         [
           {
             crop: {
-              originX: finalCropX,
-              originY: finalCropY,
-              width: cropSize,
-              height: cropSize,
+              originX: boundedCropX,
+              originY: boundedCropY,
+              width: boundedCropSize,
+              height: boundedCropSize,
             },
           },
           { resize: { width: 800, height: 800 } },
