@@ -66,6 +66,8 @@ class ReorderService {
   private isOfflineMode = false;
   private pendingSyncItems: ReorderItem[] = []; // Items waiting to sync
   private readonly STORAGE_KEY = 'reorder_items_offline';
+  private deletedItemIds: Set<string> = new Set(); // Track locally deleted items
+  private readonly DELETED_ITEMS_KEY = 'reorder_deleted_items';
 
   // Event-driven sync queue for batched operations
   private syncQueue: Array<{ operation: string; data: any; timestamp: number; retryCount?: number }> = [];
@@ -209,11 +211,16 @@ class ReorderService {
     }
   }
 
-  // 🚨 EMERGENCY FIX: Add conflict resolution to prevent data loss
+  // 🚨 CRITICAL FIX: Proper conflict resolution with deletion tracking
   private mergeServerAndLocalItems(serverItems: ReorderItem[], localItems: ReorderItem[]): ReorderItem[] {
+    // Start with server items as base truth
     const merged = [...serverItems];
 
-    // Add local items that don't exist on server
+    // Track items that were deleted locally (not in local items but exist on server)
+    const localItemIds = new Set(localItems.map(item => item.id));
+    const localItemKeys = new Set(localItems.map(item => `${item.itemId}-${item.createdAt}`));
+
+    // Add local items that don't exist on server (new local additions)
     localItems.forEach(localItem => {
       const existsOnServer = serverItems.find(serverItem =>
         serverItem.id === localItem.id ||
@@ -221,12 +228,31 @@ class ReorderService {
       );
 
       if (!existsOnServer) {
-        logger.info('[ReorderService]', `🔄 Preserving local item not found on server: ${localItem.itemId}`);
+        logger.info('[ReorderService]', `🔄 Preserving local addition: ${localItem.itemId}`);
         merged.push(localItem);
       }
     });
 
-    return merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // CRITICAL FIX: Remove server items that were deleted locally
+    const finalMerged = merged.filter(item => {
+      // Check if item was explicitly deleted locally
+      if (this.deletedItemIds.has(item.id)) {
+        logger.info('[ReorderService]', `🗑️ Removing server item that was deleted locally: ${item.itemId} (${item.id})`);
+        return false;
+      }
+
+      // Keep item if it exists in local items OR if it's a new server item
+      const existsLocally = localItemIds.has(item.id) ||
+                           localItemKeys.has(`${item.itemId}-${item.createdAt}`);
+
+      if (!existsLocally) {
+        logger.info('[ReorderService]', `🗑️ Removing server item not found locally: ${item.itemId}`);
+        return false;
+      }
+      return true;
+    });
+
+    return finalMerged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   // loadTeamDataForItems method removed - now using cross-referencing via crossReferenceService
@@ -756,6 +782,11 @@ class ReorderService {
 
       if (response.data?.deleteReorderItem) {
         logger.info('[ReorderService]', `✅ Background sync: Deleted item on server`, { itemId: data.id });
+
+        // CRITICAL FIX: Remove from deleted tracking after successful sync
+        this.deletedItemIds.delete(data.id);
+        await this.saveDeletedItems();
+
         await appSyncMonitor.afterRequest('deleteReorderItem', 'ReorderService:syncDeleteItem', true);
       } else {
         throw new Error('No data returned from deleteReorderItem mutation');
@@ -1412,6 +1443,10 @@ class ReorderService {
       }
 
       // Step 2: 🚀 LOCAL-FIRST: Delete locally first, then sync in background
+      // CRITICAL FIX: Track deletion before removing from list
+      this.deletedItemIds.add(itemId);
+      await this.saveDeletedItems();
+
       // Remove from active reorder list
       this.reorderItems.splice(itemIndex, 1);
 
@@ -1688,8 +1723,34 @@ class ReorderService {
         }));
         logger.info('[ReorderService]', `Loaded ${this.reorderItems.length} items from offline storage`);
       }
+
+      // CRITICAL FIX: Also load deleted items tracking
+      await this.loadDeletedItems();
     } catch (error) {
       logger.error('[ReorderService]', 'Failed to load offline items', { error });
+    }
+  }
+
+  // Save and load deleted items tracking
+  private async saveDeletedItems(): Promise<void> {
+    try {
+      const deletedArray = Array.from(this.deletedItemIds);
+      await AsyncStorage.setItem(this.DELETED_ITEMS_KEY, JSON.stringify(deletedArray));
+    } catch (error) {
+      logger.error('[ReorderService]', 'Failed to save deleted items', { error });
+    }
+  }
+
+  private async loadDeletedItems(): Promise<void> {
+    try {
+      const stored = await AsyncStorage.getItem(this.DELETED_ITEMS_KEY);
+      if (stored) {
+        const deletedArray = JSON.parse(stored);
+        this.deletedItemIds = new Set(deletedArray);
+        logger.info('[ReorderService]', `Loaded ${this.deletedItemIds.size} deleted item IDs`);
+      }
+    } catch (error) {
+      logger.error('[ReorderService]', 'Failed to load deleted items', { error });
     }
   }
 
