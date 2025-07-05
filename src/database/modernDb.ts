@@ -907,15 +907,9 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
               dataJson
             );
 
-            // CRITICAL FIX: Use catalog_v1_ids to link images to items
-            // Square uses legacy v1 IDs to link images, not the v2 image_ids field
-            if (!isDeleted && obj.catalog_v1_ids && obj.catalog_v1_ids.length > 0) {
-              try {
-                await this.linkImageViaCatalogV1Ids(obj.id, obj.catalog_v1_ids);
-              } catch (linkError) {
-                logger.warn('Database::IMAGE', 'Failed to link image via catalog_v1_ids', { imageId: obj.id, error: linkError });
-              }
-            }
+            // NOTE: Square handles image-to-item linking automatically
+            // CatalogItem objects contain image_ids array that references CatalogImage objects
+            // No manual linking needed - just ensure both are synced properly
 
             // CRITICAL FIX: Only notify data change listeners if NOT in bulk sync mode
             try {

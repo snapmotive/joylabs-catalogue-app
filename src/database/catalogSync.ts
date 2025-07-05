@@ -1387,129 +1387,95 @@ export class CatalogSyncService {
   // --- End: checkAndRunCatchUpSync ---
 
   /**
-   * CRITICAL FIX: Link images to items using PRODUCT ID, not name matching
-   * Square stores object_id in the full IMAGE object data_json
+   * PROPER FIX: Follow Square's Catalog API Image System
+   *
+   * Square's two-step process:
+   * 1. CatalogItem objects contain image_ids array (already synced)
+   * 2. CatalogImage objects contain URLs (already synced)
+   * 3. We need to ensure image URLs are properly stored and accessible
+   *
+   * The issue is NOT linking - it's that image URLs aren't being fetched/stored properly
    */
   private async linkImagesToItems(): Promise<void> {
     try {
       const db = await modernDb.getDatabase();
 
-      // Get all images with their full data_json to check for object_id
-      const images = await db.getAllAsync<{
+      // Check if items already have image_ids but images don't have URLs
+      const itemsWithImageIds = await db.getAllAsync<{
         id: string;
         name: string;
-        url: string;
         data_json: string;
       }>(`
-        SELECT id, name, url, data_json
-        FROM images
+        SELECT id, name, data_json
+        FROM catalog_items
         WHERE is_deleted = 0
+        AND data_json LIKE '%image_ids%'
+        AND data_json NOT LIKE '%"image_ids":[]%'
       `);
 
-      logger.info('CatalogSync::linkImagesToItems', `Found ${images.length} images to process`);
+      logger.info('CatalogSync::linkImagesToItems', `Found ${itemsWithImageIds.length} items with image_ids`);
 
-      let linkedCount = 0;
+      let itemsProcessed = 0;
+      let imagesWithoutUrls = 0;
 
-      for (const image of images) {
+      for (const item of itemsWithImageIds) {
         try {
-          // Parse the full image data to find object_id (item ID reference)
-          const imageData = JSON.parse(image.data_json || '{}');
+          const itemData = JSON.parse(item.data_json || '{}');
+          const imageIds = itemData.item_data?.image_ids || [];
 
-          // Check for object_id in the image data (this is the item ID)
-          let itemId = null;
+          if (imageIds.length > 0) {
+            // Check if these image IDs exist in our images table with URLs
+            for (const imageId of imageIds) {
+              const image = await db.getFirstAsync<{
+                id: string;
+                url: string;
+              }>(`
+                SELECT id, url
+                FROM images
+                WHERE id = ? AND is_deleted = 0
+              `, [imageId]);
 
-          // Method 1: Check for object_id in root level
-          if (imageData.object_id) {
-            itemId = imageData.object_id;
-          }
-
-          // Method 2: Check for object_id in image_data
-          if (!itemId && imageData.image_data?.object_id) {
-            itemId = imageData.image_data.object_id;
-          }
-
-          // Method 3: Check for any field that looks like an item ID
-          if (!itemId) {
-            // Look for any field that matches item ID pattern
-            const dataStr = JSON.stringify(imageData);
-            const itemIdMatch = dataStr.match(/"([A-Z0-9]{20,})"/g);
-            if (itemIdMatch) {
-              // Find one that exists as an item in our database
-              for (const match of itemIdMatch) {
-                const potentialItemId = match.replace(/"/g, '');
-                const itemExists = await db.getFirstAsync(
-                  'SELECT id FROM catalog_items WHERE id = ? AND is_deleted = 0',
-                  [potentialItemId]
-                );
-                if (itemExists) {
-                  itemId = potentialItemId;
-                  break;
-                }
-              }
-            }
-          }
-
-          if (itemId) {
-            // Get the item and add this image to its image_ids
-            const item = await db.getFirstAsync<{
-              id: string;
-              name: string;
-              data_json: string;
-            }>(`
-              SELECT id, name, data_json
-              FROM catalog_items
-              WHERE id = ? AND is_deleted = 0
-            `, [itemId]);
-
-            if (item) {
-              // Parse item data and add image ID
-              const itemData = JSON.parse(item.data_json || '{}');
-              if (!itemData.item_data) itemData.item_data = {};
-              if (!itemData.item_data.image_ids) itemData.item_data.image_ids = [];
-
-              // Add image ID if not already present
-              if (!itemData.item_data.image_ids.includes(image.id)) {
-                itemData.item_data.image_ids.push(image.id);
-
-                // Update item in database
-                await db.runAsync(
-                  'UPDATE catalog_items SET data_json = ? WHERE id = ?',
-                  [JSON.stringify(itemData), item.id]
-                );
-
-                linkedCount++;
-                logger.info('CatalogSync::linkImagesToItems', `Linked image to item by ID`, {
-                  imageId: image.id,
+              if (!image) {
+                logger.warn('CatalogSync::linkImagesToItems', `Image not found in database`, {
                   itemId: item.id,
                   itemName: item.name,
-                  method: itemData.object_id ? 'object_id' : 'pattern_match'
+                  imageId: imageId
+                });
+              } else if (!image.url || image.url === '') {
+                imagesWithoutUrls++;
+                logger.warn('CatalogSync::linkImagesToItems', `Image exists but has no URL`, {
+                  itemId: item.id,
+                  itemName: item.name,
+                  imageId: imageId
+                });
+              } else {
+                logger.debug('CatalogSync::linkImagesToItems', `Image properly linked with URL`, {
+                  itemId: item.id,
+                  itemName: item.name,
+                  imageId: imageId,
+                  hasUrl: !!image.url
                 });
               }
-            } else {
-              logger.warn('CatalogSync::linkImagesToItems', `Item not found for image`, {
-                imageId: image.id,
-                itemId: itemId
-              });
             }
-          } else {
-            logger.debug('CatalogSync::linkImagesToItems', `No item ID found for image`, {
-              imageId: image.id,
-              imageName: image.name
-            });
+            itemsProcessed++;
           }
 
         } catch (parseError) {
-          logger.warn('CatalogSync::linkImagesToItems', `Failed to parse image data`, {
-            imageId: image.id,
+          logger.warn('CatalogSync::linkImagesToItems', `Failed to parse item data`, {
+            itemId: item.id,
             error: parseError
           });
         }
       }
 
-      logger.info('CatalogSync::linkImagesToItems', `Successfully linked ${linkedCount} images to items`);
+      logger.info('CatalogSync::linkImagesToItems', `Analysis complete`, {
+        itemsProcessed,
+        imagesWithoutUrls,
+        message: imagesWithoutUrls > 0 ? 'Some images missing URLs - check IMAGE sync process' : 'All images have URLs'
+      });
 
     } catch (error) {
-      logger.error('CatalogSync::linkImagesToItems', 'Failed to link images to items', error);
+      logger.error('CatalogSync::linkImagesToItems', 'Failed to analyze image linking', error);
       throw error;
     }
   }
