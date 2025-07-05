@@ -487,11 +487,12 @@ class SquareImageService {
       
       // 2. Add the new image ID if not already present
       if (!currentImageIds.includes(imageId)) {
+        // CRITICAL FIX: Make the new image PRIMARY by putting it FIRST in the array
         const updatedItem = {
           ...item,
           item_data: {
             ...item.item_data,
-            image_ids: [...currentImageIds, imageId]
+            image_ids: [imageId, ...currentImageIds] // New image becomes primary (first)
           }
         };
 
@@ -678,9 +679,10 @@ class SquareImageService {
 
         // Add the new image ID if not already present
         if (!currentImageIds.includes(imageId)) {
+          // CRITICAL FIX: Make the new image PRIMARY by putting it FIRST in the array
           const updatedData = {
             ...currentData,
-            image_ids: [...currentImageIds, imageId]
+            image_ids: [imageId, ...currentImageIds] // New image becomes primary (first)
           };
 
           // Update the item with new image_ids

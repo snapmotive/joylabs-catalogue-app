@@ -1738,7 +1738,9 @@ export default function ItemDetails() {
       },
     });
   }, [navigation, isNewItem, item?.name, isEdited, router]);
-  
+
+
+
   // NEW: Effect to handle unsaved changes before leaving the screen
   usePreventRemove(
     isEdited,

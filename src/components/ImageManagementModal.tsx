@@ -36,6 +36,7 @@ interface ImageManagementModalProps {
   onImageUpload?: (imageUri: string, imageName: string) => Promise<void>;
   onImageMakePrimary?: (imageId: string) => Promise<void>;
   onImageDelete?: (imageId: string) => Promise<void>;
+  onOperationComplete?: () => void; // Callback to signal when modal UI is updated
 }
 
 const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
@@ -46,7 +47,8 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
   itemName,
   onImageUpload,
   onImageMakePrimary,
-  onImageDelete
+  onImageDelete,
+  onOperationComplete
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
@@ -56,11 +58,19 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
   const [simplePickerVisible, setSimplePickerVisible] = useState(false);
   const [selectedImageForCrop, setSelectedImageForCrop] = useState<string | null>(null);
 
+  // Local state to track modal's images - this updates immediately for UI responsiveness
+  const [localImages, setLocalImages] = useState<ItemImage[]>(images);
+
+  // Update local images when prop changes
+  useEffect(() => {
+    setLocalImages(images);
+  }, [images]);
+
   // Preload images when modal becomes visible
   useEffect(() => {
-    if (visible && images.length > 0) {
-      logger.info('ImageManagementModal', 'Modal opened - preloading images', { count: images.length });
-      images.forEach(image => {
+    if (visible && localImages.length > 0) {
+      logger.info('ImageManagementModal', 'Modal opened - preloading images', { count: localImages.length });
+      localImages.forEach(image => {
         if (image.url) {
           imageCacheService.preloadImage(image.url);
         }
@@ -68,7 +78,7 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
     } else if (!visible) {
       logger.info('ImageManagementModal', 'Modal closed');
     }
-  }, [visible, images]);
+  }, [visible, localImages]);
 
 
 
@@ -83,8 +93,10 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
+        allowsEditing: false, // This should skip the iOS editing screen
         quality: 0.8,
+        exif: false,
+        base64: false, // Don't include base64 to reduce memory usage
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -143,11 +155,20 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
     try {
       await onImageUpload(imageUri, imageName);
 
-      // Don't preload the local URI - the uploaded image will have a different Square URL
-      // The image will be available in the images prop after the upload completes
       logger.info('ImageManagementModal', 'Image upload completed successfully', { imageName });
 
-      // No success popup - user can see the image was added to the list
+      // The parent will update the images prop, which will update localImages via useEffect
+      // No need to manually update localImages here - let the prop update handle it
+
+      // Wait a moment for the parent to refresh and pass updated images
+      // Then signal completion so parent can refresh search results
+      setTimeout(() => {
+        if (onOperationComplete) {
+          logger.info('ImageManagementModal', 'Signaling operation completion to parent');
+          onOperationComplete();
+        }
+      }, 200); // Small delay to ensure parent has updated images prop
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error('ImageManagementModal', 'Error uploading image', { error: errorMessage, fullError: error });
@@ -168,6 +189,15 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
     setMakingPrimaryImageId(imageId);
     try {
       await onImageMakePrimary(imageId);
+
+      // Wait for parent to refresh and pass updated images, then signal completion
+      setTimeout(() => {
+        if (onOperationComplete) {
+          logger.info('ImageManagementModal', 'Signaling make primary completion to parent');
+          onOperationComplete();
+        }
+      }, 200);
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error('ImageManagementModal', 'Error making image primary', { error: errorMessage, fullError: error });
@@ -186,6 +216,15 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
     setDeletingImageId(imageId);
     try {
       await onImageDelete(imageId);
+
+      // Wait for parent to refresh and pass updated images, then signal completion
+      setTimeout(() => {
+        if (onOperationComplete) {
+          logger.info('ImageManagementModal', 'Signaling delete completion to parent');
+          onOperationComplete();
+        }
+      }, 200);
+
     } catch (error) {
       logger.error('ImageManagementModal', 'Error deleting image', { error, imageId });
       Alert.alert('Error', 'Failed to delete image. Please try again.');
@@ -233,10 +272,10 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
           {/* Existing Images */}
           <View style={styles.existingImagesSection}>
             <Text style={styles.sectionTitle}>
-              Current Images ({images.length})
+              Current Images ({localImages.length})
             </Text>
-            
-            {images.length === 0 ? (
+
+            {localImages.length === 0 ? (
               <View style={styles.noImagesContainer}>
                 <Ionicons name="image-outline" size={48} color={lightTheme.colors.secondary} />
                 <Text style={styles.noImagesText}>No images yet</Text>
@@ -244,7 +283,7 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
               </View>
             ) : (
               <View style={styles.imagesGrid}>
-                {images.map((image, index) => {
+                {localImages.map((image, index) => {
                   const isPrimary = index === 0;
                   const isLoading = deletingImageId === image.id || makingPrimaryImageId === image.id;
 
@@ -310,31 +349,33 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
           </View>
         </ScrollView>
 
-        {/* Camera and Gallery Buttons */}
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleTakePhoto}
-            disabled={isUploading}
-          >
-            {isUploading ? (
-              <ActivityIndicator size="small" color={lightTheme.colors.background} />
-            ) : (
-              <>
-                <Ionicons name="camera" size={24} color={lightTheme.colors.background} />
-                <Text style={styles.actionButtonText}>Camera</Text>
-              </>
-            )}
-          </TouchableOpacity>
+        {/* Fixed Footer with Camera and Gallery Buttons */}
+        <View style={styles.fixedFooter}>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleTakePhoto}
+              disabled={isUploading}
+            >
+              {isUploading ? (
+                <ActivityIndicator size="small" color={lightTheme.colors.background} />
+              ) : (
+                <>
+                  <Ionicons name="camera" size={24} color={lightTheme.colors.background} />
+                  <Text style={styles.actionButtonText}>Camera</Text>
+                </>
+              )}
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleSelectFromGallery}
-            disabled={isUploading}
-          >
-            <Ionicons name="images" size={24} color={lightTheme.colors.background} />
-            <Text style={styles.actionButtonText}>Gallery</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleSelectFromGallery}
+              disabled={isUploading}
+            >
+              <Ionicons name="images" size={24} color={lightTheme.colors.background} />
+              <Text style={styles.actionButtonText}>Gallery</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         </View>
       </SafeAreaView>
@@ -470,6 +511,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     padding: 16,
+    paddingBottom: 100, // Extra padding to account for fixed footer
   },
   itemInfo: {
     backgroundColor: lightTheme.colors.card,
@@ -714,14 +756,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 8,
   },
+  fixedFooter: {
+    backgroundColor: lightTheme.colors.background,
+    borderTopWidth: 1,
+    borderTopColor: lightTheme.colors.border,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    paddingBottom: 34, // Extra padding for safe area
+  },
   buttonRow: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
     flexDirection: 'row',
     gap: 12,
-    zIndex: 1000,
   },
   actionButton: {
     flex: 1,

@@ -17,6 +17,23 @@ export type DataChangeListener = (event: DataChangeEvent) => void;
 
 class DataChangeNotifier {
   private listeners: DataChangeListener[] = [];
+  private isDisabled: boolean = false;
+
+  /**
+   * Temporarily disable all notifications
+   */
+  disable(): void {
+    this.isDisabled = true;
+    logger.debug('[DataChangeNotifier]', 'Notifications disabled');
+  }
+
+  /**
+   * Re-enable notifications
+   */
+  enable(): void {
+    this.isDisabled = false;
+    logger.debug('[DataChangeNotifier]', 'Notifications enabled');
+  }
 
   /**
    * Add a listener for data changes
@@ -36,6 +53,16 @@ class DataChangeNotifier {
    * Notify all listeners of a data change
    */
   notifyChange(event: DataChangeEvent): void {
+    // Skip notifications if disabled
+    if (this.isDisabled) {
+      logger.debug('[DataChangeNotifier]', 'Skipping notification - disabled', {
+        table: event.table,
+        operation: event.operation,
+        itemId: event.itemId
+      });
+      return;
+    }
+
     // Only log bulk operations and errors to reduce spam
     if (event.itemId === 'BULK_SYNC_COMPLETE' || this.listeners.length === 0) {
       logger.debug('[DataChangeNotifier]', 'Notifying data change', {

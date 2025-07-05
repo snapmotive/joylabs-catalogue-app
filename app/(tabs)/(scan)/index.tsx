@@ -46,6 +46,8 @@ import * as queries from '../../../src/graphql/queries';
 import { useAuthenticator } from '@aws-amplify/ui-react-native';
 import CachedImage from '../../../src/components/CachedImage';
 import { imageCacheService } from '../../../src/services/imageCacheService';
+import ImageManagementModal from '../../../src/components/ImageManagementModal';
+import { squareImageService } from '../../../src/services/squareImageService';
 
 const client = generateClient();
 
@@ -112,6 +114,25 @@ const SearchResultsArea = memo(({
   const [reorderNotificationMessage, setReorderNotificationMessage] = useState('');
   const [reorderNotificationType, setReorderNotificationType] = useState<'success' | 'error'>('success');
   const [reorderNotificationItemId, setReorderNotificationItemId] = useState<string | null>(null);
+
+  // Image management modal state
+  const [isImageManagementVisible, setIsImageManagementVisible] = useState(false);
+  const [selectedItemForImageManagement, setSelectedItemForImageManagement] = useState<SearchResultItem | null>(null);
+
+  // Handle opening image management modal directly
+  const handleImageLongPress = useCallback((item: SearchResultItem) => {
+    setSelectedItemForImageManagement(item);
+    setIsImageManagementVisible(true);
+  }, []);
+
+  // Handle closing image management modal
+  const handleCloseImageManagement = useCallback(() => {
+    setIsImageManagementVisible(false);
+    setSelectedItemForImageManagement(null);
+  }, []);
+
+  // Image management handlers
+  // Image management handlers are defined after executeSearch to avoid dependency issues
 
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [allSearchResults, setAllSearchResults] = useState<SearchResultItem[]>([]); // Keep original results
@@ -267,88 +288,200 @@ const SearchResultsArea = memo(({
     allSearchResultsRef.current = allSearchResults;
   }, [searchResults, allSearchResults]);
 
-  // Real-time data change monitoring for targeted item updates using event-driven approach
+  // Debounced refresh to prevent race conditions and multiple simultaneous refreshes
+  const debouncedRefresh = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerDebouncedRefresh = useCallback((reason: string, delay: number = 500) => {
+    // Clear any existing timeout
+    if (debouncedRefresh.current) {
+      clearTimeout(debouncedRefresh.current);
+    }
+
+    // Set new timeout
+    debouncedRefresh.current = setTimeout(() => {
+      logger.info('SearchResultsArea', `Executing debounced refresh: ${reason}`);
+      executeSearch();
+      debouncedRefresh.current = null;
+    }, delay);
+  }, [executeSearch]);
+
+  // Image management handlers - completion signals come from modal callback
+  const handleImageUpload = useCallback(async (imageUri: string, imageName: string): Promise<void> => {
+    if (!selectedItemForImageManagement) {
+      throw new Error('No item selected for image management');
+    }
+
+    // COMPLETELY DISABLE all database change notifications during image operation
+    const { dataChangeNotifier } = await import('../../../src/services/dataChangeNotifier');
+    dataChangeNotifier.disable();
+    logger.info('SearchResultsArea', 'Disabled database change notifications for image upload');
+
+    try {
+      const result = await squareImageService.uploadImage(imageUri, imageName, selectedItemForImageManagement.id);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to upload image');
+      }
+
+      logger.info('SearchResultsArea', 'Image upload completed successfully, waiting for modal completion signal');
+
+    } catch (error) {
+      // Re-enable notifications on error
+      dataChangeNotifier.enable();
+      logger.info('SearchResultsArea', 'Re-enabled database change notifications due to error');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to upload image: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
+  const handleImageDelete = useCallback(async (imageId: string): Promise<void> => {
+    if (!selectedItemForImageManagement) return;
+
+    try {
+      const result = await squareImageService.deleteImage(imageId, selectedItemForImageManagement.id);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete image');
+      }
+
+      // No immediate completion signal - modal will handle this via callback
+      logger.info('SearchResultsArea', 'Image delete completed successfully, waiting for modal completion signal');
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to delete image: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
+  const handleImageMakePrimary = useCallback(async (imageId: string): Promise<void> => {
+    if (!selectedItemForImageManagement) return;
+
+    try {
+      const currentImages = [...(selectedItemForImageManagement.images || [])];
+      const imageIndex = currentImages.findIndex(img => img.id === imageId);
+
+      if (imageIndex === -1) {
+        throw new Error('Image not found in current images');
+      }
+
+      if (imageIndex === 0) {
+        return; // Already primary
+      }
+
+      // Reorder images to make selected image primary
+      const [selectedImage] = currentImages.splice(imageIndex, 1);
+      const reorderedImages = [selectedImage, ...currentImages];
+      const imageIds = reorderedImages.map(img => img.id);
+
+      const result = await squareImageService.reorderImages(selectedItemForImageManagement.id, imageIds);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to reorder images');
+      }
+
+      // No immediate completion signal - modal will handle this via callback
+      logger.info('SearchResultsArea', 'Image reorder completed successfully, waiting for modal completion signal');
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to make image primary: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
+  // Handle completion signal from image management modal
+  const handleImageOperationComplete = useCallback(async () => {
+    logger.info('SearchResultsArea', 'Received completion signal from image management modal, re-enabling notifications and refreshing');
+
+    // Re-enable database change notifications
+    const { dataChangeNotifier } = await import('../../../src/services/dataChangeNotifier');
+    dataChangeNotifier.enable();
+    logger.info('SearchResultsArea', 'Re-enabled database change notifications');
+
+    // CRITICAL FIX: Clear the item cache to force fresh data fetch with updated images
+    if (selectedItemForImageManagement) {
+      logger.info('SearchResultsArea', 'Clearing item cache to force fresh data with updated images', {
+        itemId: selectedItemForImageManagement.id
+      });
+
+      // Clear the item from the store cache so it gets fresh data from DB
+      const { useAppStore } = await import('../../../src/store');
+      const store = useAppStore.getState();
+      const updatedProducts = store.products.filter((p: any) => p.id !== selectedItemForImageManagement.id);
+      store.setProducts(updatedProducts);
+
+      logger.info('SearchResultsArea', 'Item removed from cache, will be fetched fresh from database');
+    }
+
+    // Small delay to ensure any pending database operations complete, then refresh
+    setTimeout(async () => {
+      logger.info('SearchResultsArea', 'About to execute search refresh after image upload');
+      await executeSearch();
+
+      // CRITICAL FIX: Update selectedItemForImageManagement with fresh data
+      if (selectedItemForImageManagement) {
+        const updatedItem = await getProductById(selectedItemForImageManagement.id);
+        if (updatedItem) {
+          logger.info('SearchResultsArea', 'Updating selectedItemForImageManagement with fresh data', {
+            itemId: selectedItemForImageManagement.id,
+            oldImageCount: selectedItemForImageManagement.images?.length || 0,
+            newImageCount: updatedItem.images?.length || 0
+          });
+
+          // Update the selected item with fresh data so modal gets updated images
+          setSelectedItemForImageManagement(updatedItem as SearchResultItem);
+        }
+      }
+    }, 200);
+  }, [executeSearch, selectedItemForImageManagement]);
+
+  // Real-time data change monitoring with proper debouncing and race condition prevention
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
+
+    // Only set up listener if we have an active search
+    if (searchTopic.trim() === '') {
+      return;
+    }
 
     // Set up event-driven data change monitoring
     import('../../../src/services/dataChangeNotifier').then(({ dataChangeNotifier }) => {
       unsubscribe = dataChangeNotifier.addListener(async (event) => {
-        // Check if changes affect catalog items that might be in current search results
-        if (event.table === 'catalog_items' && searchTopic.trim() !== '') {
+        // Handle different types of data changes with proper debouncing
+        if (searchTopic.trim() === '') return; // No search active, ignore changes
 
-          // CRITICAL FIX: Handle bulk sync completion notification
-          if (event.itemId === 'BULK_SYNC_COMPLETE') {
-            logger.info('SearchResultsArea', 'Bulk sync completed, refreshing search results', {
-              syncType: event.data?.syncType,
-              itemCount: event.data?.itemCount
-            });
+        // Handle bulk sync completion - immediate refresh needed
+        if (event.table === 'catalog_items' && event.itemId === 'BULK_SYNC_COMPLETE') {
+          logger.info('SearchResultsArea', 'Bulk sync completed, triggering immediate refresh', {
+            syncType: event.data?.syncType,
+            itemCount: event.data?.itemCount
+          });
+          triggerDebouncedRefresh('bulk-sync-complete', 1000); // Longer delay for bulk operations
+          return;
+        }
 
-            // Add a small delay to ensure all database operations are complete
-            setTimeout(() => {
-              executeSearch();
-            }, 500);
-            return;
-          }
+        // Check if this change affects items in current search results
+        let affectedItemId = event.itemId;
+        if (event.table === 'images' && event.data?.itemId) {
+          affectedItemId = event.data.itemId; // For images, the actual item ID is in data
+        }
 
-          // EFFICIENCY FIX: For individual item updates, do targeted item update
-          // Use refs to get current values without dependency issues
-          const isItemInCurrentResults = searchResultsRef.current.some(item => item.id === event.itemId) ||
-                                        allSearchResultsRef.current.some(item => item.id === event.itemId);
+        const isItemInCurrentResults = searchResultsRef.current.some(item => item.id === affectedItemId) ||
+                                      allSearchResultsRef.current.some(item => item.id === affectedItemId);
 
-          if (isItemInCurrentResults) {
-            logger.info('SearchResultsArea', `Catalog item ${event.operation} detected for item in results - updating targeted item`, {
-              itemId: event.itemId,
-              operation: event.operation
-            });
+        if (isItemInCurrentResults) {
+          logger.info('SearchResultsArea', `${event.table} ${event.operation} detected for item in results`, {
+            table: event.table,
+            operation: event.operation,
+            itemId: event.itemId,
+            affectedItemId
+          });
 
-            // Add a small delay to ensure database changes are committed, then update just this item
-            setTimeout(async () => {
-              try {
-                // Fetch updated item data
-                const { getItemOrVariationRawById } = await import('../../../src/database/modernDb');
-                const updatedRawItem = await getItemOrVariationRawById(event.itemId);
-
-                if (updatedRawItem) {
-                  const { transformCatalogItemToItem } = await import('../../../src/utils/catalogTransformers');
-                  const updatedItem = transformCatalogItemToItem(updatedRawItem);
-
-                  if (updatedItem) {
-                    // Update both search result arrays
-                    setSearchResults(prev => prev.map(item =>
-                      item.id === event.itemId ? updatedItem : item
-                    ));
-                    setAllSearchResults(prev => prev.map(item =>
-                      item.id === event.itemId ? updatedItem : item
-                    ));
-
-                    logger.debug('SearchResultsArea', 'Successfully updated item in search results', { itemId: event.itemId });
-                  } else {
-                    logger.warn('SearchResultsArea', 'Transform returned null, removing item from results', { itemId: event.itemId });
-                    // Remove item if transform failed
-                    setSearchResults(prev => prev.filter(item => item.id !== event.itemId));
-                    setAllSearchResults(prev => prev.filter(item => item.id !== event.itemId));
-                  }
-                } else if (event.operation === 'DELETE') {
-                  // Remove deleted item from results
-                  setSearchResults(prev => prev.filter(item => item.id !== event.itemId));
-                  setAllSearchResults(prev => prev.filter(item => item.id !== event.itemId));
-                  logger.debug('SearchResultsArea', 'Removed deleted item from search results', { itemId: event.itemId });
-                }
-              } catch (updateError) {
-                logger.warn('SearchResultsArea', 'Failed to update specific item, falling back to full search', {
-                  itemId: event.itemId,
-                  updateError
-                });
-                executeSearch(); // Fallback to full search if targeted update fails
-              }
-            }, 100);
-          } else {
-            logger.debug('SearchResultsArea', `Catalog item ${event.operation} detected but item not in current results - ignoring`, {
-              itemId: event.itemId,
-              operation: event.operation
-            });
-          }
+          // Use debounced refresh for all operations
+          triggerDebouncedRefresh(`${event.table}-${event.operation}`, 300);
+        } else {
+          logger.debug('SearchResultsArea', `${event.table} ${event.operation} detected but item not in current results - ignoring`, {
+            table: event.table,
+            operation: event.operation,
+            itemId: event.itemId,
+            affectedItemId
+          });
         }
       });
 
@@ -361,8 +494,13 @@ const SearchResultsArea = memo(({
       if (unsubscribe) {
         unsubscribe();
       }
+      // Clean up any pending debounced refresh
+      if (debouncedRefresh.current) {
+        clearTimeout(debouncedRefresh.current);
+        debouncedRefresh.current = null;
+      }
     };
-  }, [executeSearch, searchTopic]); // FIXED: Removed searchResults and allSearchResults to prevent infinite loops
+  }, [executeSearch, searchTopic, triggerDebouncedRefresh]);
 
 
 
@@ -659,23 +797,39 @@ const SearchResultsArea = memo(({
           {/* Item Image Thumbnail */}
           <View style={(styles as any).resultImageContainer}>
             {item.images && item.images.length > 0 && item.images[0].url ? (
-              <CachedImage
-                source={{ uri: item.images[0].url }}
-                style={(styles as any).resultImage}
-                fallbackStyle={(styles as any).resultImageFallback}
-                fallbackText={item.name ? item.name.substring(0, 2).toUpperCase() : '📦'}
-                showLoadingIndicator={false}
-                onError={() => {
-                  // Handle image load error silently
-                  console.log('Failed to load image for item:', item.id);
+              <Pressable
+                onPress={() => handleResultItemPress(item)}
+                onLongPress={() => {
+                  // Long press on image thumbnail opens image management modal directly
+                  handleImageLongPress(item);
                 }}
-              />
+                style={(styles as any).resultImage}
+              >
+                <CachedImage
+                  source={{ uri: item.images[0].url }}
+                  style={(styles as any).resultImage}
+                  fallbackStyle={(styles as any).resultImageFallback}
+                  fallbackText={item.name ? item.name.substring(0, 2).toUpperCase() : '📦'}
+                  showLoadingIndicator={false}
+                  onError={() => {
+                    // Handle image load error silently
+                    console.log('Failed to load image for item:', item.id);
+                  }}
+                />
+              </Pressable>
             ) : (
-              <View style={(styles as any).resultImageFallback}>
+              <Pressable
+                onPress={() => handleResultItemPress(item)}
+                onLongPress={() => {
+                  // Long press on fallback image opens image management modal directly
+                  handleImageLongPress(item);
+                }}
+                style={(styles as any).resultImageFallback}
+              >
                 <Text style={(styles as any).resultImageFallbackText}>
                   {item.name ? item.name.substring(0, 2).toUpperCase() : '📦'}
                 </Text>
-              </View>
+              </Pressable>
             )}
           </View>
 
@@ -812,6 +966,19 @@ const SearchResultsArea = memo(({
         position="top"
         autoClose={true}
         autoCloseTime={2500} // Slightly shorter time for quick feedback
+      />
+
+      {/* Image Management Modal */}
+      <ImageManagementModal
+        visible={isImageManagementVisible}
+        onClose={handleCloseImageManagement}
+        images={selectedItemForImageManagement?.images || []}
+        itemId={selectedItemForImageManagement?.id || ''}
+        itemName={selectedItemForImageManagement?.name || ''}
+        onImageUpload={handleImageUpload}
+        onImageMakePrimary={handleImageMakePrimary}
+        onImageDelete={handleImageDelete}
+        onOperationComplete={handleImageOperationComplete}
       />
 
     </View>

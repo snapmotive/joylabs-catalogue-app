@@ -13,6 +13,7 @@ interface ReorderGridItemProps {
   item: any; // DisplayReorderItem type
   size: 'large' | 'medium' | 'small';
   onImageTap: (imageUrl: string, item: any) => void;
+  onImageLongPress?: (itemId: string) => void;
   onItemPress: () => void;
   onItemLongPress: () => void;
   onToggleComplete: () => void;
@@ -22,6 +23,7 @@ const ReorderGridItem: React.FC<ReorderGridItemProps> = ({
   item,
   size,
   onImageTap,
+  onImageLongPress,
   onItemPress,
   onItemLongPress,
   onToggleComplete,
@@ -104,6 +106,12 @@ const ReorderGridItem: React.FC<ReorderGridItemProps> = ({
         onPress={() => {
           if (item.item?.images && item.item.images.length > 0 && item.item.images[0]?.url) {
             onImageTap(item.item.images[0].url, item);
+          }
+        }}
+        onLongPress={() => {
+          // Long press on image thumbnail opens image management modal directly
+          if (onImageLongPress) {
+            onImageLongPress(item.itemId);
           }
         }}
       >

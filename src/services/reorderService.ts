@@ -276,8 +276,8 @@ class ReorderService {
     try {
       // Listen for real-time data changes and automatically refresh affected reorder items
       const unsubscribe = dataChangeNotifier.addListener(async (event: DataChangeEvent) => {
-        // Only handle catalog item and team data changes
-        if (event.table === 'catalog_items' || event.table === 'team_data') {
+        // Handle catalog item, team data, and image changes
+        if (event.table === 'catalog_items' || event.table === 'team_data' || event.table === 'images') {
 
           // CRITICAL FIX: Handle bulk sync completion notification
           if (event.itemId === 'BULK_SYNC_COMPLETE') {
@@ -294,13 +294,21 @@ class ReorderService {
           }
 
           // For individual item updates, check if any of our reorder items are affected
+          let targetItemId = event.itemId;
+
+          // For image changes, the itemId in event.data is the actual item ID that owns the image
+          if (event.table === 'images' && event.data?.itemId) {
+            targetItemId = event.data.itemId;
+          }
+
           const affectedReorderItems = this.reorderItems.filter(item =>
-            item.itemId === event.itemId
+            item.itemId === targetItemId
           );
 
           if (affectedReorderItems.length > 0) {
             logger.info('[ReorderService]', `Reorder item affected by ${event.table} ${event.operation}`, {
-              itemId: event.itemId,
+              eventItemId: event.itemId,
+              targetItemId,
               operation: event.operation,
               affectedCount: affectedReorderItems.length
             });

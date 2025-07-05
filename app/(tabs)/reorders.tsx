@@ -33,6 +33,8 @@ import CachedImage from '../../src/components/CachedImage';
 import ImageOverlay from '../../src/components/ImageOverlay';
 import ReorderGridItem from '../../src/components/ReorderGridItem';
 import { imageCacheService } from '../../src/services/imageCacheService';
+import ImageManagementModal from '../../src/components/ImageManagementModal';
+import { squareImageService } from '../../src/services/squareImageService';
 
 const client = generateClient();
 
@@ -669,6 +671,10 @@ const ReordersScreen = React.memo(() => {
   const [showImageOverlay, setShowImageOverlay] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState('');
   const [selectedItemInfo, setSelectedItemInfo] = useState<any>(null);
+
+  // Image management modal state
+  const [isImageManagementVisible, setIsImageManagementVisible] = useState(false);
+  const [selectedItemForImageManagement, setSelectedItemForImageManagement] = useState<DisplayReorderItem | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'large-grid' | 'medium-grid' | 'small-grid'>('list');
   const [isScreenFocused, setIsScreenFocused] = useState(true);
 
@@ -1376,6 +1382,80 @@ const ReordersScreen = React.memo(() => {
     setShowImageOverlay(true);
   }, []);
 
+  // Handle opening image management modal directly
+  const handleImageLongPress = useCallback((item: DisplayReorderItem) => {
+    setSelectedItemForImageManagement(item);
+    setIsImageManagementVisible(true);
+  }, []);
+
+  // Handle closing image management modal
+  const handleCloseImageManagement = useCallback(() => {
+    setIsImageManagementVisible(false);
+    setSelectedItemForImageManagement(null);
+  }, []);
+
+  // Image management handlers
+  const handleImageUpload = useCallback(async (imageUri: string, imageName: string): Promise<void> => {
+    if (!selectedItemForImageManagement) return;
+
+    try {
+      const result = await squareImageService.uploadImage(imageUri, imageName, selectedItemForImageManagement.itemId);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to upload image');
+      }
+      // The data change listeners will handle UI updates
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to upload image: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
+  const handleImageDelete = useCallback(async (imageId: string): Promise<void> => {
+    if (!selectedItemForImageManagement) return;
+
+    try {
+      const result = await squareImageService.deleteImage(imageId, selectedItemForImageManagement.itemId);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete image');
+      }
+      // The data change listeners will handle UI updates
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to delete image: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
+  const handleImageMakePrimary = useCallback(async (imageId: string): Promise<void> => {
+    if (!selectedItemForImageManagement) return;
+
+    try {
+      const currentImages = [...(selectedItemForImageManagement.item?.images || [])];
+      const imageIndex = currentImages.findIndex(img => img.id === imageId);
+
+      if (imageIndex === -1) {
+        throw new Error('Image not found in current images');
+      }
+
+      if (imageIndex === 0) {
+        return; // Already primary
+      }
+
+      // Reorder images to make selected image primary
+      const [selectedImage] = currentImages.splice(imageIndex, 1);
+      const reorderedImages = [selectedImage, ...currentImages];
+      const imageIds = reorderedImages.map(img => img.id);
+
+      const result = await squareImageService.reorderImages(selectedItemForImageManagement.itemId, imageIds);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to reorder images');
+      }
+      // The data change listeners will handle UI updates
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to make image primary: ${errorMessage}`);
+    }
+  }, [selectedItemForImageManagement]);
+
   // Handle long press to open item modal
   const handleItemLongPress = useCallback((item: DisplayReorderItem) => {
     if (item.isCustom) {
@@ -1962,7 +2042,7 @@ const ReordersScreen = React.memo(() => {
             )}
           </Pressable>
 
-          {/* Item Image Thumbnail - Tappable for overlay */}
+          {/* Item Image Thumbnail - Tappable for overlay, Long press for image management */}
           <Pressable
             style={{
               width: 64,
@@ -1977,6 +2057,10 @@ const ReordersScreen = React.memo(() => {
               if (item.item?.images && item.item.images.length > 0 && item.item.images[0]?.url) {
                 handleImageTap(item.item.images[0].url, item);
               }
+            }}
+            onLongPress={() => {
+              // Long press on image thumbnail opens image management modal directly
+              handleImageLongPress(item);
             }}
           >
             {item.item?.images && item.item.images.length > 0 && item.item.images[0]?.url ? (
@@ -2273,6 +2357,11 @@ const ReordersScreen = React.memo(() => {
         item={item}
         size={gridSize}
         onImageTap={handleImageTap}
+        onImageLongPress={(itemId: string) => {
+          // Long press on image thumbnail opens image management modal directly
+          const reorderItem = item; // The item is already available in this scope
+          handleImageLongPress(reorderItem);
+        }}
         onItemPress={() => {
           if (item.isCustom) {
             handleEditCustomItem(item);
@@ -2288,7 +2377,7 @@ const ReordersScreen = React.memo(() => {
         }}
       />
     );
-  }, [viewMode, handleImageTap, handleItemLongPress, user]);
+  }, [viewMode, handleImageTap, handleItemLongPress, user, router]);
 
   // Updated render item function to handle both items and headers - memoized
   const renderListItem = useCallback(({ item }: { item: any }) => {
@@ -2505,7 +2594,7 @@ const ReordersScreen = React.memo(() => {
       <BarcodeScanner
         onScan={handleBarcodeScan}
         onError={handleScanError}
-        enabled={isScreenFocused && !showQuantityModal && !showSelectionModal && !showErrorModal && !showAddCustomItem && !showImageOverlay}
+        enabled={isScreenFocused && !showQuantityModal && !showSelectionModal && !showErrorModal && !showAddCustomItem && !showImageOverlay && !isImageManagementVisible}
         minLength={8}
         maxLength={50}
         timeout={150}
@@ -3234,6 +3323,18 @@ const ReordersScreen = React.memo(() => {
           setShowImageOverlay(false);
           setSelectedItemInfo(null);
         }}
+      />
+
+      {/* Image Management Modal */}
+      <ImageManagementModal
+        visible={isImageManagementVisible}
+        onClose={handleCloseImageManagement}
+        images={selectedItemForImageManagement?.item?.images || []}
+        itemId={selectedItemForImageManagement?.itemId || ''}
+        itemName={selectedItemForImageManagement?.itemName || ''}
+        onImageUpload={handleImageUpload}
+        onImageMakePrimary={handleImageMakePrimary}
+        onImageDelete={handleImageDelete}
       />
     </SafeAreaView>
   );
