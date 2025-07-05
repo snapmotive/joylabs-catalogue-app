@@ -71,20 +71,13 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
     imageWidth.value = width;
     imageHeight.value = height;
 
-    // Calculate initial scale to fill crop window (no black bars)
-    const aspectRatio = width / height;
-    const cropAspectRatio = 1; // Square crop window
+    // CRITICAL FIX: Start at 1x zoom (user expectation)
+    // The image will be displayed with resizeMode="contain" which automatically fits it
+    // User can then zoom in/out from this natural 1x starting point
 
-    let initialScale = 1;
-    if (aspectRatio > cropAspectRatio) {
-      // Landscape image: scale to fill height
-      initialScale = CROP_SIZE / height;
-    } else {
-      // Portrait image: scale to fill width
-      initialScale = CROP_SIZE / width;
-    }
+    const initialScale = 1;
 
-    // Set initial scale to fill crop window
+    // Set initial scale to 1x (natural zoom level)
     scale.value = initialScale;
     lastScale.value = initialScale;
   };
@@ -183,7 +176,9 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
       const originalWidth = originalDimensions.width;
       const originalHeight = originalDimensions.height;
 
-      // CRITICAL FIX: Use ACTUAL displayed image size, not calculated assumptions
+      // COMPLETE REWRITE: Simple, correct crop calculation
+
+      // Step 1: Get actual displayed image size
       const actualDisplayWidth = imageLayout.width;
       const actualDisplayHeight = imageLayout.height;
 
@@ -191,48 +186,48 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
         throw new Error('Image layout not available - please try again');
       }
 
-      // Calculate crop center in original image coordinates
-      // translateX/Y are in ACTUAL display coordinates, convert to original coordinates
-      const scaleFactorX = originalWidth / actualDisplayWidth;
-      const scaleFactorY = originalHeight / actualDisplayHeight;
+      // Step 2: Calculate how the original image maps to the displayed image
+      // The displayed image uses resizeMode="contain", so it maintains aspect ratio
+      const originalAspect = originalWidth / originalHeight;
+      const displayAspect = actualDisplayWidth / actualDisplayHeight;
 
-      const translateXInOriginal = -currentTranslateX * scaleFactorX;
-      const translateYInOriginal = -currentTranslateY * scaleFactorY;
+      let displayedImageWidth, displayedImageHeight;
+      if (originalAspect > displayAspect) {
+        // Original is wider - displayed image fills width, has letterboxing on top/bottom
+        displayedImageWidth = actualDisplayWidth;
+        displayedImageHeight = actualDisplayWidth / originalAspect;
+      } else {
+        // Original is taller - displayed image fills height, has letterboxing on left/right
+        displayedImageHeight = actualDisplayHeight;
+        displayedImageWidth = actualDisplayHeight * originalAspect;
+      }
 
+      // Step 3: Calculate the scale factor from original to displayed
+      const baseScaleFactor = displayedImageWidth / originalWidth; // Same as displayedImageHeight / originalHeight
+
+      // Step 4: Apply user's zoom and pan
+      const totalScale = baseScaleFactor * currentScale;
+
+      // Step 5: Convert display coordinates to original coordinates
+      const translateXInOriginal = -currentTranslateX / baseScaleFactor;
+      const translateYInOriginal = -currentTranslateY / baseScaleFactor;
+
+      // Step 6: Calculate crop center in original coordinates
       const cropCenterX = (originalWidth / 2) + translateXInOriginal;
       const cropCenterY = (originalHeight / 2) + translateYInOriginal;
 
-      // CRITICAL FIX: Calculate crop size based on what's actually visible in the crop window
-      // The crop window shows a CROP_SIZE x CROP_SIZE area of the displayed image
-      // We need to find what area of the ORIGINAL image this corresponds to
+      // Step 7: Calculate crop size in original coordinates
+      // The crop window is CROP_SIZE x CROP_SIZE in display coordinates
+      const cropSizeInOriginal = CROP_SIZE / totalScale;
 
-      // The displayed image is scaled by currentScale relative to its "fit" size
-      // The "fit" size is how the image appears when it first loads (to fill the crop window)
-      const aspectRatio = originalWidth / originalHeight;
-      let baseFitScale;
+      // Step 8: Calculate crop bounds
+      const cropX = cropCenterX - (cropSizeInOriginal / 2);
+      const cropY = cropCenterY - (cropSizeInOriginal / 2);
 
-      if (aspectRatio > 1) {
-        // Landscape: image height fits crop window, width extends beyond
-        baseFitScale = CROP_SIZE / actualDisplayHeight;
-      } else {
-        // Portrait: image width fits crop window, height extends beyond
-        baseFitScale = CROP_SIZE / actualDisplayWidth;
-      }
-
-      // The total scale from original to what's shown in crop window
-      const totalScaleFromOriginal = baseFitScale * currentScale;
-
-      // Size of crop area in original image coordinates
-      const originalCropSize = CROP_SIZE / totalScaleFromOriginal;
-
-      // Center the square crop area
-      const squareCropX = cropCenterX - (originalCropSize / 2);
-      const squareCropY = cropCenterY - (originalCropSize / 2);
-
-      // Ensure the square crop area is within bounds
-      const boundedCropX = Math.max(0, Math.min(squareCropX, originalWidth - originalCropSize));
-      const boundedCropY = Math.max(0, Math.min(squareCropY, originalHeight - originalCropSize));
-      const boundedCropSize = Math.min(originalCropSize, originalWidth - boundedCropX, originalHeight - boundedCropY);
+      // Step 9: Ensure crop is within image bounds
+      const boundedCropX = Math.max(0, Math.min(cropX, originalWidth - cropSizeInOriginal));
+      const boundedCropY = Math.max(0, Math.min(cropY, originalHeight - cropSizeInOriginal));
+      const boundedCropSize = Math.min(cropSizeInOriginal, originalWidth - boundedCropX, originalHeight - boundedCropY);
 
       const croppedImage = await ImageManipulator.manipulateAsync(
         selectedImageUri,
