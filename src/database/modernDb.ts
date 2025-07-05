@@ -648,6 +648,23 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
 
         switch (obj.type) {
           case 'ITEM':
+            // CRITICAL DEBUG: Log ITEM objects to see if they have image_ids
+            if (obj.item_data?.image_ids && obj.item_data.image_ids.length > 0) {
+              logger.info('Database::ITEM', 'ITEM with images found', {
+                id: obj.id,
+                name: obj.item_data?.name,
+                imageIds: obj.item_data.image_ids,
+                imageCount: obj.item_data.image_ids.length
+              });
+            } else if (obj.item_data?.name?.includes('Beyoglu')) {
+              logger.warn('Database::ITEM', 'Beyoglu item has NO image_ids', {
+                id: obj.id,
+                name: obj.item_data?.name,
+                hasImageIds: !!obj.item_data?.image_ids,
+                imageIds: obj.item_data?.image_ids,
+                itemDataKeys: obj.item_data ? Object.keys(obj.item_data) : []
+              });
+            }
             // First, insert the main item data
             await statements.ITEM.executeAsync(
               obj.id,
@@ -890,15 +907,9 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
               dataJson
             );
 
-            // CRITICAL: Check if this image belongs to any item and update item's image_ids
-            // Square might not populate image_ids in ITEM objects, so we need to do it ourselves
-            if (!isDeleted && obj.image_data) {
-              try {
-                await this.linkImageToItem(obj.id, obj.image_data);
-              } catch (linkError) {
-                logger.warn('Database::IMAGE', 'Failed to link image to item', { imageId: obj.id, error: linkError });
-              }
-            }
+            // NOTE: Square should automatically link images to items via object_id
+            // If images aren't showing, the issue is likely that ITEM objects
+            // don't have image_ids populated when fetched from Square API
 
             // CRITICAL FIX: Only notify data change listeners if NOT in bulk sync mode
             try {
@@ -931,101 +942,7 @@ export async function upsertCatalogObjects(objects: CatalogObjectFromApi[]): Pro
   }
 }
 
-/**
- * Link an image to its parent item by updating the item's image_ids array
- * This is needed because Square might not populate image_ids in ITEM objects
- */
-async function linkImageToItem(imageId: string, imageData: any): Promise<void> {
-  try {
-    const db = await getDatabase();
 
-    // Strategy 1: Check if image data has object_id (direct reference)
-    let parentItemId = imageData.object_id;
-
-    // Strategy 2: Extract item name from image name and find matching item
-    if (!parentItemId && imageData.name) {
-      // Image names often contain item name + timestamp: "Item Name_1234567890.jpg"
-      const imageName = imageData.name;
-
-      // Remove timestamp and extension to get item name
-      const itemNameMatch = imageName.match(/^(.+?)_\d+\.(jpg|jpeg|png)$/i);
-      if (itemNameMatch) {
-        const itemName = itemNameMatch[1];
-
-        logger.debug('Database::linkImageToItem', 'Extracted item name from image', {
-          imageId,
-          imageName,
-          extractedItemName: itemName
-        });
-
-        // Find item by name
-        const itemRow = await db.getFirstAsync<{ id: string; name: string }>(
-          'SELECT id, name FROM catalog_items WHERE name = ? AND is_deleted = 0',
-          [itemName]
-        );
-
-        if (itemRow) {
-          parentItemId = itemRow.id;
-          logger.info('Database::linkImageToItem', 'Found item by name match', {
-            imageId,
-            itemName,
-            parentItemId
-          });
-        }
-      }
-    }
-
-    // If still no parent item found, skip linking
-    if (!parentItemId) {
-      logger.debug('Database::linkImageToItem', 'No parent item found for image', {
-        imageId,
-        imageName: imageData.name,
-        hasObjectId: !!imageData.object_id
-      });
-      return;
-    }
-
-    // Get the current item data
-    const itemRow = await db.getFirstAsync<{ id: string; data_json: string }>(
-      'SELECT id, data_json FROM catalog_items WHERE id = ? AND is_deleted = 0',
-      [parentItemId]
-    );
-
-    if (!itemRow) {
-      logger.warn('Database::linkImageToItem', 'Parent item not found in database', { imageId, parentItemId });
-      return;
-    }
-
-    // Parse current item data
-    const itemData = JSON.parse(itemRow.data_json || '{}');
-    const currentImageIds = itemData.item_data?.image_ids || [];
-
-    // Add image ID if not already present
-    if (!currentImageIds.includes(imageId)) {
-      if (!itemData.item_data) {
-        itemData.item_data = {};
-      }
-      itemData.item_data.image_ids = [...currentImageIds, imageId];
-
-      // Update the item
-      await db.runAsync(
-        'UPDATE catalog_items SET data_json = ?, updated_at = ? WHERE id = ?',
-        [JSON.stringify(itemData), new Date().toISOString(), parentItemId]
-      );
-
-      logger.info('Database::linkImageToItem', 'Successfully linked image to item', {
-        imageId,
-        parentItemId,
-        totalImages: itemData.item_data.image_ids.length
-      });
-    } else {
-      logger.debug('Database::linkImageToItem', 'Image already linked to item', { imageId, parentItemId });
-    }
-
-  } catch (error) {
-    logger.error('Database::linkImageToItem', 'Failed to link image to item', { imageId, error });
-  }
-}
 
 /**
  * Clears all catalog-related tables.
