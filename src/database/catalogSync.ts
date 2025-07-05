@@ -508,7 +508,17 @@ export class CatalogSyncService {
         
       } while (cursor);
       
-      // Step 3: Finalize sync
+      // Step 3: CRITICAL FIX - Link images to items after sync
+      logger.info('CatalogSync', 'Starting post-sync image linking...');
+      try {
+        await this.linkImagesToItems();
+        logger.info('CatalogSync', 'Post-sync image linking completed');
+      } catch (linkError) {
+        logger.error('CatalogSync', 'Post-sync image linking failed', linkError);
+        // Don't fail the whole sync for this
+      }
+
+      // Step 4: Finalize sync
       logger.info('CatalogSync', 'Full sync completed successfully');
       await this.updateSyncStatus({
         isSyncing: false,
@@ -1375,6 +1385,84 @@ export class CatalogSyncService {
     }
   }
   // --- End: checkAndRunCatchUpSync ---
+
+  /**
+   * CRITICAL FIX: Link images to items after sync
+   * Square doesn't populate image_ids in ITEM objects, so we need to find
+   * images that belong to each item and manually populate the image_ids
+   */
+  private async linkImagesToItems(): Promise<void> {
+    try {
+      const db = await modernDb.getDatabase();
+
+      // Get all images that have names containing item names (app-uploaded images)
+      const images = await db.getAllAsync<{
+        id: string;
+        name: string;
+        url: string;
+      }>(`
+        SELECT id, name, url
+        FROM images
+        WHERE is_deleted = 0
+        AND name IS NOT NULL
+        AND name != ''
+      `);
+
+      logger.info('CatalogSync::linkImagesToItems', `Found ${images.length} images to process`);
+
+      let linkedCount = 0;
+
+      for (const image of images) {
+        // Extract item name from image name: "Item Name_timestamp.jpg" -> "Item Name"
+        const match = image.name.match(/^(.+?)_\d+\.(jpg|jpeg|png)$/i);
+        if (match) {
+          const itemName = match[1];
+
+          // Find the item by name
+          const item = await db.getFirstAsync<{
+            id: string;
+            name: string;
+            data_json: string;
+          }>(`
+            SELECT id, name, data_json
+            FROM catalog_items
+            WHERE name = ? AND is_deleted = 0
+          `, [itemName]);
+
+          if (item) {
+            // Parse item data and add image ID
+            const itemData = JSON.parse(item.data_json || '{}');
+            if (!itemData.item_data) itemData.item_data = {};
+            if (!itemData.item_data.image_ids) itemData.item_data.image_ids = [];
+
+            // Add image ID if not already present
+            if (!itemData.item_data.image_ids.includes(image.id)) {
+              itemData.item_data.image_ids.push(image.id);
+
+              // Update item in database
+              await db.runAsync(
+                'UPDATE catalog_items SET data_json = ? WHERE id = ?',
+                [JSON.stringify(itemData), item.id]
+              );
+
+              linkedCount++;
+              logger.debug('CatalogSync::linkImagesToItems', `Linked image to item`, {
+                imageId: image.id,
+                itemId: item.id,
+                itemName: item.name
+              });
+            }
+          }
+        }
+      }
+
+      logger.info('CatalogSync::linkImagesToItems', `Successfully linked ${linkedCount} images to items`);
+
+    } catch (error) {
+      logger.error('CatalogSync::linkImagesToItems', 'Failed to link images to items', error);
+      throw error;
+    }
+  }
 }
 
 // Export the singleton instance

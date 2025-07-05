@@ -438,6 +438,23 @@ class SquareImageService {
         placeholderImageId: imageId
       });
 
+      // CRITICAL FIX: Manually add image to item's image_ids array
+      // Square doesn't automatically do this even with object_id set
+      try {
+        await this.addImageToSquareItem(actualImageId, itemId);
+        logger.info('SquareImageService', 'Successfully linked image to item', {
+          actualImageId,
+          itemId
+        });
+      } catch (linkError) {
+        logger.error('SquareImageService', 'Failed to link image to item', {
+          actualImageId,
+          itemId,
+          error: linkError
+        });
+        // Don't fail the whole operation - image was created successfully
+      }
+
       return {
         success: true,
         imageId: actualImageId, // Return the actual Square-generated image ID
