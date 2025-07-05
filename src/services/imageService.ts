@@ -97,9 +97,9 @@ class ImageService {
           is_deleted: number;
         }>(`
           SELECT id, name, url, caption, is_deleted
-          FROM images 
+          FROM images
           WHERE id IN (${placeholders}) AND is_deleted = 0
-        `, uncachedIds);
+        `, uncachedIds); // This is correct - uncachedIds is already an array
 
         // Process database results
         for (const row of dbResults) {

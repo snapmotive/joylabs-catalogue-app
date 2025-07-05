@@ -76,6 +76,45 @@ export async function testImageSync(): Promise<{
       }
     }
 
+    // 5. CRITICAL DIAGNOSTIC: Check if images have URLs
+    const imagesWithoutUrls = await db.getAllAsync<{
+      id: string;
+      name: string;
+      url: string;
+    }>(`
+      SELECT id, name, url
+      FROM images
+      WHERE is_deleted = 0
+      AND (url IS NULL OR url = '')
+      LIMIT 10
+    `);
+
+    logger.warn('TestImageSync', `Found ${imagesWithoutUrls.length} images WITHOUT URLs:`, imagesWithoutUrls);
+
+    // 6. Check if any items reference these images
+    if (imagesWithoutUrls.length > 0) {
+      const imageIdsWithoutUrls = imagesWithoutUrls.map(img => img.id);
+      const itemsReferencingBrokenImages = await db.getAllAsync<{
+        id: string;
+        name: string;
+        data_json: string;
+      }>(`
+        SELECT id, name, data_json
+        FROM catalog_items
+        WHERE is_deleted = 0
+        AND data_json LIKE '%${imageIdsWithoutUrls[0]}%'
+        LIMIT 3
+      `);
+
+      logger.warn('TestImageSync', `Items referencing images without URLs:`,
+        itemsReferencingBrokenImages.map(item => ({
+          id: item.id,
+          name: item.name,
+          imageIds: JSON.parse(item.data_json).item_data?.image_ids || []
+        }))
+      );
+    }
+
     return {
       success: true,
       imageCount,
@@ -83,7 +122,9 @@ export async function testImageSync(): Promise<{
         id: img.id,
         url: img.url,
         name: img.name || ''
-      }))
+      })),
+      imagesWithoutUrls: imagesWithoutUrls.length,
+      itemsWithImageIds: itemsWithImages.length
     };
 
   } catch (error) {
