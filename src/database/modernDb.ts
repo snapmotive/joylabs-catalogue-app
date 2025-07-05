@@ -939,23 +939,51 @@ async function linkImageToItem(imageId: string, imageData: any): Promise<void> {
   try {
     const db = await getDatabase();
 
-    // Look for the image's parent item in the full object data
-    // Square images might have object_id or other references
-    let parentItemId = null;
+    // Strategy 1: Check if image data has object_id (direct reference)
+    let parentItemId = imageData.object_id;
 
-    // Check if image data has object_id (common Square pattern)
-    if (imageData.object_id) {
-      parentItemId = imageData.object_id;
+    // Strategy 2: Extract item name from image name and find matching item
+    if (!parentItemId && imageData.name) {
+      // Image names often contain item name + timestamp: "Item Name_1234567890.jpg"
+      const imageName = imageData.name;
+
+      // Remove timestamp and extension to get item name
+      const itemNameMatch = imageName.match(/^(.+?)_\d+\.(jpg|jpeg|png)$/i);
+      if (itemNameMatch) {
+        const itemName = itemNameMatch[1];
+
+        logger.debug('Database::linkImageToItem', 'Extracted item name from image', {
+          imageId,
+          imageName,
+          extractedItemName: itemName
+        });
+
+        // Find item by name
+        const itemRow = await db.getFirstAsync<{ id: string; name: string }>(
+          'SELECT id, name FROM catalog_items WHERE name = ? AND is_deleted = 0',
+          [itemName]
+        );
+
+        if (itemRow) {
+          parentItemId = itemRow.id;
+          logger.info('Database::linkImageToItem', 'Found item by name match', {
+            imageId,
+            itemName,
+            parentItemId
+          });
+        }
+      }
     }
 
-    // If no direct reference, search for items that might reference this image
-    // This is a fallback - we'll search for items that were updated around the same time
+    // If still no parent item found, skip linking
     if (!parentItemId) {
-      logger.debug('Database::linkImageToItem', 'No direct item reference found for image', { imageId });
+      logger.debug('Database::linkImageToItem', 'No parent item found for image', {
+        imageId,
+        imageName: imageData.name,
+        hasObjectId: !!imageData.object_id
+      });
       return;
     }
-
-    logger.info('Database::linkImageToItem', 'Linking image to item', { imageId, parentItemId });
 
     // Get the current item data
     const itemRow = await db.getFirstAsync<{ id: string; data_json: string }>(
@@ -964,7 +992,7 @@ async function linkImageToItem(imageId: string, imageData: any): Promise<void> {
     );
 
     if (!itemRow) {
-      logger.warn('Database::linkImageToItem', 'Parent item not found', { imageId, parentItemId });
+      logger.warn('Database::linkImageToItem', 'Parent item not found in database', { imageId, parentItemId });
       return;
     }
 
@@ -990,6 +1018,8 @@ async function linkImageToItem(imageId: string, imageData: any): Promise<void> {
         parentItemId,
         totalImages: itemData.item_data.image_ids.length
       });
+    } else {
+      logger.debug('Database::linkImageToItem', 'Image already linked to item', { imageId, parentItemId });
     }
 
   } catch (error) {
