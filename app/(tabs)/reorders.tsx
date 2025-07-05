@@ -1400,7 +1400,7 @@ const ReordersScreen = React.memo(() => {
     }, [])
   );
 
-  // Monitor sync status
+  // Monitor sync status with stability
   useEffect(() => {
     const updateSyncStatus = () => {
       const serviceStatus = reorderService.getSyncStatus();
@@ -1411,10 +1411,18 @@ const ReordersScreen = React.memo(() => {
 
       const correctedStatus = {
         ...serviceStatus,
-        isAuthenticated: isActuallyAuthenticated
+        isAuthenticated: isActuallyAuthenticated,
+        // STABILITY FIX: If authenticated, assume online to prevent flickering
+        isOnline: isActuallyAuthenticated ? true : serviceStatus.isOnline
       };
 
-      setSyncStatus(correctedStatus);
+      // Only update if status actually changed to prevent unnecessary re-renders
+      setSyncStatus(prevStatus => {
+        if (JSON.stringify(prevStatus) !== JSON.stringify(correctedStatus)) {
+          return correctedStatus;
+        }
+        return prevStatus;
+      });
 
       // Log discrepancies for debugging
       if (serviceStatus.isAuthenticated !== isActuallyAuthenticated) {
@@ -1430,8 +1438,8 @@ const ReordersScreen = React.memo(() => {
     // Update immediately
     updateSyncStatus();
 
-    // Update every 5 seconds
-    const interval = setInterval(updateSyncStatus, 5000);
+    // STABILITY FIX: Reduce update frequency to prevent flickering
+    const interval = setInterval(updateSyncStatus, 10000); // 10 seconds instead of 5
 
     return () => clearInterval(interval);
   }, [user]); // Add user dependency to update when auth state changes

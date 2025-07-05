@@ -543,7 +543,7 @@ class ReorderService {
     }
   }
 
-  // Handle creates from other users
+  // Handle creates from all sources (including same user from other devices)
   private async handleExternalCreate(createdItem: any) {
     try {
       // Check if we already have this item locally
@@ -603,7 +603,7 @@ class ReorderService {
     }
   }
 
-  // Handle deletes from other users
+  // Handle deletes from all sources (including same user from other devices)
   private async handleExternalDelete(deletedItem: any) {
     try {
       // Remove the item from our local list
