@@ -183,42 +183,47 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
       const originalWidth = originalDimensions.width;
       const originalHeight = originalDimensions.height;
 
-      // Calculate how the image is displayed (fitted to crop window)
-      const aspectRatio = originalWidth / originalHeight;
-      let baseDisplayWidth, baseDisplayHeight;
+      // CRITICAL FIX: Use ACTUAL displayed image size, not calculated assumptions
+      const actualDisplayWidth = imageLayout.width;
+      const actualDisplayHeight = imageLayout.height;
 
-      if (aspectRatio > 1) {
-        // Landscape: fit height to crop window, scale to fill
-        baseDisplayHeight = CROP_SIZE;
-        baseDisplayWidth = CROP_SIZE * aspectRatio;
-      } else {
-        // Portrait: fit width to crop window, scale to fill
-        baseDisplayWidth = CROP_SIZE;
-        baseDisplayHeight = CROP_SIZE / aspectRatio;
+      if (!actualDisplayWidth || !actualDisplayHeight) {
+        throw new Error('Image layout not available - please try again');
       }
 
-      // The actual scale relative to the original image
-      const totalScale = currentScale;
-
-      // Calculate crop center and size for square crop window
-
       // Calculate crop center in original image coordinates
-      // translateX/Y are in display coordinates, convert to original coordinates
-      const translateXInOriginal = -currentTranslateX * (originalWidth / baseDisplayWidth) / currentScale;
-      const translateYInOriginal = -currentTranslateY * (originalHeight / baseDisplayHeight) / currentScale;
+      // translateX/Y are in ACTUAL display coordinates, convert to original coordinates
+      const scaleFactorX = originalWidth / actualDisplayWidth;
+      const scaleFactorY = originalHeight / actualDisplayHeight;
+
+      const translateXInOriginal = -currentTranslateX * scaleFactorX;
+      const translateYInOriginal = -currentTranslateY * scaleFactorY;
 
       const cropCenterX = (originalWidth / 2) + translateXInOriginal;
       const cropCenterY = (originalHeight / 2) + translateYInOriginal;
 
-      // Calculate crop area directly for square crop window
+      // CRITICAL FIX: Calculate crop size based on what's actually visible in the crop window
+      // The crop window shows a CROP_SIZE x CROP_SIZE area of the displayed image
+      // We need to find what area of the ORIGINAL image this corresponds to
 
-      // CRITICAL FIX: Crop exactly what the user sees in the crop window
-      // The crop window is always square (CROP_SIZE x CROP_SIZE)
-      // So we need to crop a square area from the original image that corresponds to this window
+      // The displayed image is scaled by currentScale relative to its "fit" size
+      // The "fit" size is how the image appears when it first loads (to fill the crop window)
+      const aspectRatio = originalWidth / originalHeight;
+      let baseFitScale;
 
-      // Calculate the size of the square crop area in original image coordinates
-      const cropWindowSize = CROP_SIZE; // The crop window is always square
-      const originalCropSize = cropWindowSize / currentScale; // Size in original image coordinates
+      if (aspectRatio > 1) {
+        // Landscape: image height fits crop window, width extends beyond
+        baseFitScale = CROP_SIZE / actualDisplayHeight;
+      } else {
+        // Portrait: image width fits crop window, height extends beyond
+        baseFitScale = CROP_SIZE / actualDisplayWidth;
+      }
+
+      // The total scale from original to what's shown in crop window
+      const totalScaleFromOriginal = baseFitScale * currentScale;
+
+      // Size of crop area in original image coordinates
+      const originalCropSize = CROP_SIZE / totalScaleFromOriginal;
 
       // Center the square crop area
       const squareCropX = cropCenterX - (originalCropSize / 2);
