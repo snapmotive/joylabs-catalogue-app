@@ -463,29 +463,25 @@ class ReorderService {
     }
   }
 
-  // Subscribe only to changes from other users
+  // Subscribe to ALL changes (including same user from other devices)
   private subscribeToOtherUsersChanges() {
     try {
-      if (!this.currentUserId) {
-        logger.warn('[ReorderService]', 'Cannot setup subscriptions without currentUserId');
-        return;
-      }
+      // CRITICAL FIX: Subscribe to ALL changes, not just other users
+      // This enables cross-device sync for the same user
 
-      // Subscribe to reorder item creates from other users
+      // Subscribe to ALL reorder item creates
       const createSubscription = this.client.graphql({
-        query: subscriptions.onCreateReorderItem,
-        variables: {
-          filter: {
-            addedBy: {
-              ne: this.currentUserId // Only changes from other users
-            }
-          }
-        }
+        query: subscriptions.onCreateReorderItem
+        // REMOVED filter - listen to all changes
       }).subscribe({
         next: (result: any) => {
           const createdItem = result.data?.onCreateReorderItem;
-          if (createdItem && createdItem.addedBy !== this.currentUserId) {
-            logger.info('[ReorderService]', 'Received external create', { itemId: createdItem.itemId, addedBy: createdItem.addedBy });
+          if (createdItem) {
+            logger.info('[ReorderService]', 'Received create subscription', {
+              itemId: createdItem.itemId,
+              addedBy: createdItem.addedBy,
+              isOwnChange: createdItem.addedBy === this.currentUserId
+            });
             this.handleExternalCreate(createdItem);
           }
         },
@@ -494,21 +490,19 @@ class ReorderService {
         }
       });
 
-      // Subscribe to reorder item updates from other users
+      // Subscribe to ALL reorder item updates
       const updateSubscription = this.client.graphql({
-        query: subscriptions.onUpdateReorderItem,
-        variables: {
-          filter: {
-            addedBy: {
-              ne: this.currentUserId // Only changes from other users
-            }
-          }
-        }
+        query: subscriptions.onUpdateReorderItem
+        // REMOVED filter - listen to all changes
       }).subscribe({
         next: (result: any) => {
           const updatedItem = result.data?.onUpdateReorderItem;
-          if (updatedItem && updatedItem.addedBy !== this.currentUserId) {
-            logger.info('[ReorderService]', 'Received external update', { itemId: updatedItem.itemId, addedBy: updatedItem.addedBy });
+          if (updatedItem) {
+            logger.info('[ReorderService]', 'Received update subscription', {
+              itemId: updatedItem.itemId,
+              addedBy: updatedItem.addedBy,
+              isOwnChange: updatedItem.addedBy === this.currentUserId
+            });
             this.handleExternalUpdate(updatedItem);
           }
         },
@@ -517,21 +511,19 @@ class ReorderService {
         }
       });
 
-      // Subscribe to reorder item deletes from other users
+      // Subscribe to ALL reorder item deletes
       const deleteSubscription = this.client.graphql({
-        query: subscriptions.onDeleteReorderItem,
-        variables: {
-          filter: {
-            addedBy: {
-              ne: this.currentUserId // Only changes from other users
-            }
-          }
-        }
+        query: subscriptions.onDeleteReorderItem
+        // REMOVED filter - listen to all changes
       }).subscribe({
         next: (result: any) => {
           const deletedItem = result.data?.onDeleteReorderItem;
-          if (deletedItem && deletedItem.addedBy !== this.currentUserId) {
-            logger.info('[ReorderService]', 'Received external delete', { itemId: deletedItem.itemId, addedBy: deletedItem.addedBy });
+          if (deletedItem) {
+            logger.info('[ReorderService]', 'Received delete subscription', {
+              itemId: deletedItem.itemId,
+              addedBy: deletedItem.addedBy,
+              isOwnChange: deletedItem.addedBy === this.currentUserId
+            });
             this.handleExternalDelete(deletedItem);
           }
         },
@@ -541,9 +533,10 @@ class ReorderService {
       });
 
       this.subscriptions.push(createSubscription, updateSubscription, deleteSubscription);
-      logger.info('[ReorderService]', 'Smart subscriptions setup complete', {
+      logger.info('[ReorderService]', 'Real-time subscriptions setup complete (ALL changes)', {
         currentUserId: this.currentUserId,
-        subscriptionCount: this.subscriptions.length
+        subscriptionCount: this.subscriptions.length,
+        note: 'Listening to ALL changes including same user from other devices'
       });
     } catch (error) {
       logger.error('[ReorderService]', 'Failed to setup subscriptions', { error });
@@ -1293,6 +1286,12 @@ class ReorderService {
       // 🚀 LOCAL-FIRST: Clear locally first for instant responsiveness
       const itemsToDelete = [...this.reorderItems]; // Copy for background sync
 
+      // CRITICAL FIX: Track all deletions before clearing
+      itemsToDelete.forEach(item => {
+        this.deletedItemIds.add(item.id);
+      });
+      await this.saveDeletedItems();
+
       // Clear local arrays immediately
       this.reorderItems = [];
 
@@ -1307,7 +1306,7 @@ class ReorderService {
       await this.saveOfflineItems();
       this.notifyListeners();
 
-      logger.info('[ReorderService]', `✅ Cleared ${itemCount} items locally (background sync queued)`);
+      logger.info('[ReorderService]', `✅ Cleared ${itemCount} items locally (deletions tracked, background sync queued)`);
       return true;
     } catch (error) {
       logger.error('[ReorderService]', 'Failed to clear reorder items locally', { error });
@@ -1326,6 +1325,10 @@ class ReorderService {
 
       const removedItem = this.reorderItems[itemIndex];
 
+      // CRITICAL FIX: Track deletion before removing
+      this.deletedItemIds.add(itemId);
+      await this.saveDeletedItems();
+
       // 🚀 LOCAL-FIRST: Remove locally first for instant responsiveness
       this.reorderItems.splice(itemIndex, 1);
 
@@ -1342,7 +1345,7 @@ class ReorderService {
       await this.saveOfflineItems();
       this.notifyListeners();
 
-      logger.info('[ReorderService]', `✅ Removed item locally: ${removedItem.itemId} (background sync queued)`);
+      logger.info('[ReorderService]', `✅ Removed item locally: ${removedItem.itemId} (deletion tracked, background sync queued)`);
       return true;
     } catch (error) {
       logger.error('[ReorderService]', 'Failed to remove reorder item locally', { error, itemId });
@@ -1674,12 +1677,15 @@ class ReorderService {
         return false;
       }
 
+      // CRITICAL FIX: Set currentUserId for subscriptions
+      this.currentUserId = user.userId || user.username || user.signInDetails?.loginId;
+
       // CRITICAL FIX: Don't test AppSync connectivity during auth check
       // This was causing false offline mode when user is authenticated but AppSync has issues
       // Instead, just check authentication and assume online if authenticated
       this.isOfflineMode = false;
       logger.info('[ReorderService]', 'User authenticated - assuming online mode', {
-        userId: user.userId || user.username
+        userId: this.currentUserId
       });
       return true;
 
