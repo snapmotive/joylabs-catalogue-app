@@ -1387,25 +1387,23 @@ export class CatalogSyncService {
   // --- End: checkAndRunCatchUpSync ---
 
   /**
-   * CRITICAL FIX: Link images to items after sync
-   * Square doesn't populate image_ids in ITEM objects, so we need to find
-   * images that belong to each item and manually populate the image_ids
+   * CRITICAL FIX: Link images to items using PRODUCT ID, not name matching
+   * Square stores object_id in the full IMAGE object data_json
    */
   private async linkImagesToItems(): Promise<void> {
     try {
       const db = await modernDb.getDatabase();
 
-      // Get all images that have names containing item names (app-uploaded images)
+      // Get all images with their full data_json to check for object_id
       const images = await db.getAllAsync<{
         id: string;
         name: string;
         url: string;
+        data_json: string;
       }>(`
-        SELECT id, name, url
+        SELECT id, name, url, data_json
         FROM images
         WHERE is_deleted = 0
-        AND name IS NOT NULL
-        AND name != ''
       `);
 
       logger.info('CatalogSync::linkImagesToItems', `Found ${images.length} images to process`);
@@ -1413,46 +1411,98 @@ export class CatalogSyncService {
       let linkedCount = 0;
 
       for (const image of images) {
-        // Extract item name from image name: "Item Name_timestamp.jpg" -> "Item Name"
-        const match = image.name.match(/^(.+?)_\d+\.(jpg|jpeg|png)$/i);
-        if (match) {
-          const itemName = match[1];
+        try {
+          // Parse the full image data to find object_id (item ID reference)
+          const imageData = JSON.parse(image.data_json || '{}');
 
-          // Find the item by name
-          const item = await db.getFirstAsync<{
-            id: string;
-            name: string;
-            data_json: string;
-          }>(`
-            SELECT id, name, data_json
-            FROM catalog_items
-            WHERE name = ? AND is_deleted = 0
-          `, [itemName]);
+          // Check for object_id in the image data (this is the item ID)
+          let itemId = null;
 
-          if (item) {
-            // Parse item data and add image ID
-            const itemData = JSON.parse(item.data_json || '{}');
-            if (!itemData.item_data) itemData.item_data = {};
-            if (!itemData.item_data.image_ids) itemData.item_data.image_ids = [];
+          // Method 1: Check for object_id in root level
+          if (imageData.object_id) {
+            itemId = imageData.object_id;
+          }
 
-            // Add image ID if not already present
-            if (!itemData.item_data.image_ids.includes(image.id)) {
-              itemData.item_data.image_ids.push(image.id);
+          // Method 2: Check for object_id in image_data
+          if (!itemId && imageData.image_data?.object_id) {
+            itemId = imageData.image_data.object_id;
+          }
 
-              // Update item in database
-              await db.runAsync(
-                'UPDATE catalog_items SET data_json = ? WHERE id = ?',
-                [JSON.stringify(itemData), item.id]
-              );
-
-              linkedCount++;
-              logger.debug('CatalogSync::linkImagesToItems', `Linked image to item`, {
-                imageId: image.id,
-                itemId: item.id,
-                itemName: item.name
-              });
+          // Method 3: Check for any field that looks like an item ID
+          if (!itemId) {
+            // Look for any field that matches item ID pattern
+            const dataStr = JSON.stringify(imageData);
+            const itemIdMatch = dataStr.match(/"([A-Z0-9]{20,})"/g);
+            if (itemIdMatch) {
+              // Find one that exists as an item in our database
+              for (const match of itemIdMatch) {
+                const potentialItemId = match.replace(/"/g, '');
+                const itemExists = await db.getFirstAsync(
+                  'SELECT id FROM catalog_items WHERE id = ? AND is_deleted = 0',
+                  [potentialItemId]
+                );
+                if (itemExists) {
+                  itemId = potentialItemId;
+                  break;
+                }
+              }
             }
           }
+
+          if (itemId) {
+            // Get the item and add this image to its image_ids
+            const item = await db.getFirstAsync<{
+              id: string;
+              name: string;
+              data_json: string;
+            }>(`
+              SELECT id, name, data_json
+              FROM catalog_items
+              WHERE id = ? AND is_deleted = 0
+            `, [itemId]);
+
+            if (item) {
+              // Parse item data and add image ID
+              const itemData = JSON.parse(item.data_json || '{}');
+              if (!itemData.item_data) itemData.item_data = {};
+              if (!itemData.item_data.image_ids) itemData.item_data.image_ids = [];
+
+              // Add image ID if not already present
+              if (!itemData.item_data.image_ids.includes(image.id)) {
+                itemData.item_data.image_ids.push(image.id);
+
+                // Update item in database
+                await db.runAsync(
+                  'UPDATE catalog_items SET data_json = ? WHERE id = ?',
+                  [JSON.stringify(itemData), item.id]
+                );
+
+                linkedCount++;
+                logger.info('CatalogSync::linkImagesToItems', `Linked image to item by ID`, {
+                  imageId: image.id,
+                  itemId: item.id,
+                  itemName: item.name,
+                  method: itemData.object_id ? 'object_id' : 'pattern_match'
+                });
+              }
+            } else {
+              logger.warn('CatalogSync::linkImagesToItems', `Item not found for image`, {
+                imageId: image.id,
+                itemId: itemId
+              });
+            }
+          } else {
+            logger.debug('CatalogSync::linkImagesToItems', `No item ID found for image`, {
+              imageId: image.id,
+              imageName: image.name
+            });
+          }
+
+        } catch (parseError) {
+          logger.warn('CatalogSync::linkImagesToItems', `Failed to parse image data`, {
+            imageId: image.id,
+            error: parseError
+          });
         }
       }
 
