@@ -3,9 +3,18 @@ import { View, StyleSheet, Button, Alert } from 'react-native';
 import CatalogSyncStatus from '../../../src/components/CatalogSyncStatus';
 // import SyncLogsView from '../../../src/components/SyncLogsView'; // Removed
 import { lightTheme } from '../../../src/themes';
-import { fixImageLinking } from '../../../src/utils/testImageSync';
+import { fixImageLinking, forceDbInit } from '../../../src/utils/testImageSync';
 
 const ProfileSyncScreen: React.FC = () => {
+  const handleFixDatabase = async () => {
+    try {
+      await forceDbInit();
+      Alert.alert('Success', 'Database reinitialized! Try syncing now.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to reinitialize database');
+    }
+  };
+
   const handleFixImages = async () => {
     try {
       await fixImageLinking();
@@ -19,6 +28,12 @@ const ProfileSyncScreen: React.FC = () => {
     <View style={styles.container}>
       <CatalogSyncStatus />
       <View style={styles.debugSection}>
+        <Button
+          title="🚨 FIX DATABASE"
+          onPress={handleFixDatabase}
+          color="#ff0000"
+        />
+        <View style={{ height: 10 }} />
         <Button
           title="FIX IMAGE LINKING"
           onPress={handleFixImages}

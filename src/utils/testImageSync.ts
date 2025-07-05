@@ -96,6 +96,26 @@ export async function testSpecificItemImageSync(itemId: string): Promise<{
 }
 
 /**
+ * EMERGENCY FIX: Force database reinitialization
+ */
+export async function forceDbInit(): Promise<void> {
+  try {
+    logger.info('ForceDbInit', 'Force reinitializing database...');
+
+    // Force close existing connection
+    await modernDb.closeDatabase();
+
+    // Force reinitialize
+    await modernDb.initDatabase();
+
+    logger.info('ForceDbInit', 'Database reinitialized successfully');
+  } catch (error) {
+    logger.error('ForceDbInit', 'Failed to reinitialize database', error);
+    throw error;
+  }
+}
+
+/**
  * SIMPLE FIX: Manually link images to items based on name matching
  */
 export async function fixImageLinking(): Promise<void> {
