@@ -146,7 +146,8 @@ class CrossReferenceService {
       if (itemRow) {
         try {
           const itemData = JSON.parse(itemRow.item_data_json || '{}');
-          const imageIds = itemData.image_ids || [];
+          // CRITICAL FIX: image_ids are in item_data.image_ids, not root level
+          const imageIds = itemData.item_data?.image_ids || [];
 
           if (imageIds.length > 0) {
             const placeholders = imageIds.map(() => '?').join(',');

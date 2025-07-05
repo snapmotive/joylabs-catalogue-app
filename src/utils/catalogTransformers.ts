@@ -94,6 +94,7 @@ export function transformCatalogItemToItem(
     null;
   
   // Extract Image Data matching the ConvertedItem structure
+  // CRITICAL FIX: image_ids are in item_data.image_ids according to Square's API
   // Note: Image URLs will be populated by the image cross-referencing service
   const images: { id: string; url: string; name: string }[] = (itemData.image_ids || []).map((imageId: string) => ({
     id: imageId,
