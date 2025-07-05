@@ -176,6 +176,17 @@ export async function fixImageLinking(): Promise<void> {
     }
 
     logger.info('FixImageLinking', 'Image linking complete');
+
+    // CRITICAL: Clear store cache so items are refetched from database
+    try {
+      const { useAppStore } = await import('../store');
+      const store = useAppStore.getState();
+      store.clearProducts(); // Clear cached items so they're refetched with images
+      logger.info('FixImageLinking', 'Cleared store cache - items will be refetched with images');
+    } catch (storeError) {
+      logger.warn('FixImageLinking', 'Failed to clear store cache', storeError);
+    }
+
   } catch (error) {
     logger.error('FixImageLinking', 'Failed to fix image linking', error);
   }
