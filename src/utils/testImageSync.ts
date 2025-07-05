@@ -95,6 +95,72 @@ export async function testSpecificItemImageSync(itemId: string): Promise<{
   }
 }
 
+/**
+ * SIMPLE FIX: Manually link images to items based on name matching
+ */
+export async function fixImageLinking(): Promise<void> {
+  try {
+    const db = await modernDb.getDatabase();
+
+    // Get all images that contain item names
+    const images = await db.getAllAsync<{
+      id: string;
+      name: string;
+      url: string;
+    }>(`
+      SELECT id, name, url
+      FROM images
+      WHERE is_deleted = 0
+      AND name LIKE '%Beyoglu%'
+    `);
+
+    logger.info('FixImageLinking', `Found ${images.length} Beyoglu images`);
+
+    for (const image of images) {
+      // Extract item name from image name: "Item Name_timestamp.jpg" -> "Item Name"
+      const match = image.name.match(/^(.+?)_\d+\.(jpg|jpeg|png)$/i);
+      if (match) {
+        const itemName = match[1];
+
+        // Find the item
+        const item = await db.getFirstAsync<{
+          id: string;
+          name: string;
+          data_json: string;
+        }>(`
+          SELECT id, name, data_json
+          FROM catalog_items
+          WHERE name = ? AND is_deleted = 0
+        `, [itemName]);
+
+        if (item) {
+          // Parse item data
+          const itemData = JSON.parse(item.data_json || '{}');
+          if (!itemData.item_data) itemData.item_data = {};
+          if (!itemData.item_data.image_ids) itemData.item_data.image_ids = [];
+
+          // Add image ID if not present
+          if (!itemData.item_data.image_ids.includes(image.id)) {
+            itemData.item_data.image_ids.push(image.id);
+
+            // Update item
+            await db.runAsync(
+              'UPDATE catalog_items SET data_json = ? WHERE id = ?',
+              [JSON.stringify(itemData), item.id]
+            );
+
+            logger.info('FixImageLinking', `Linked image ${image.id} to item ${item.name}`);
+          }
+        }
+      }
+    }
+
+    logger.info('FixImageLinking', 'Image linking complete');
+  } catch (error) {
+    logger.error('FixImageLinking', 'Failed to fix image linking', error);
+  }
+}
+
 export async function testImageSync(): Promise<{
   success: boolean;
   imageCount: number;
