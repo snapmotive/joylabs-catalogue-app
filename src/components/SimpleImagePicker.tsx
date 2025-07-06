@@ -34,17 +34,17 @@ interface SimpleImagePickerProps {
   preSelectedImage?: string | null;
 }
 
-// RESPONSIVE CROP SIZE - ENSURES 1:1 ASPECT RATIO ON ALL DEVICES
-const { width: screenWidth } = Dimensions.get('window');
+// FIXED CROP SIZE - LARGE ENOUGH FOR GOOD UX
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const HEADER_HEIGHT = 60;
-const SIDE_PADDING = 12;
-const BUTTON_HEIGHT = 60;
+const SIDE_PADDING = 16;
+const BUTTON_HEIGHT = 80;
 const SPACING = 20;
 
-// Calculate crop size to fit screen while maintaining square aspect ratio
-const availableHeight = screenWidth - (HEADER_HEIGHT + BUTTON_HEIGHT + SPACING * 3);
+// Use most of the screen for crop window, but ensure it's square
 const availableWidth = screenWidth - (SIDE_PADDING * 2);
-const CROP_SIZE = Math.min(availableWidth, availableHeight, 600); // Max 600px, but responsive
+const availableHeight = screenHeight - (HEADER_HEIGHT + BUTTON_HEIGHT + SPACING * 4);
+const CROP_SIZE = Math.min(availableWidth, availableHeight) * 0.85; // Use 85% of available space
 
 const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
   visible,

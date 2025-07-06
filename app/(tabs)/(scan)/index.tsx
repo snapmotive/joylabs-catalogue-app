@@ -429,11 +429,17 @@ const SearchResultsArea = memo(({
       });
 
       if (selectedItemForImageManagement) {
+        logger.info('SearchResultsArea', 'About to call getProductById', {
+          itemId: selectedItemForImageManagement.id
+        });
+
         const updatedItem = await getProductById(selectedItemForImageManagement.id);
+
         logger.info('SearchResultsArea', 'getProductById result', {
           itemId: selectedItemForImageManagement.id,
           hasUpdatedItem: !!updatedItem,
-          updatedItemImageCount: updatedItem?.images?.length || 0
+          updatedItemImageCount: updatedItem?.images?.length || 0,
+          updatedItemImageIds: updatedItem?.images?.map((img: any) => img.id) || []
         });
 
         if (updatedItem) {
