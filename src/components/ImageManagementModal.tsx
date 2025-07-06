@@ -93,10 +93,11 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
-        allowsEditing: false, // This should skip the iOS editing screen
+        allowsEditing: false, // Skip iOS editing screen - we'll crop manually
         quality: 0.8,
         exif: false,
         base64: false, // Don't include base64 to reduce memory usage
+        aspect: [1, 1], // Request 1:1 aspect ratio from camera
       });
 
       if (!result.canceled && result.assets[0]) {
