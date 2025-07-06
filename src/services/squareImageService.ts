@@ -384,7 +384,7 @@ class SquareImageService {
       // JSON part with image metadata - Upload AND attach in one call
       const imageRequest = {
         idempotency_key: uuidv4(),
-        object_id: itemId, // Attach to item immediately
+        object_id: itemId, // Attach to item immediately (Square adds to end)
         image: {
           id: "#TEMP_ID", // Square expects this for new images
           type: 'IMAGE',
@@ -393,7 +393,7 @@ class SquareImageService {
             caption: `Uploaded via JoyLabs app`
           }
         }
-        // Note: NOT setting is_primary - let Square add to end of image_ids array
+        // Note: Square will add to end of image_ids array by default
       };
 
       logger.info('SquareImageService', 'Using FileSystem.uploadAsync for multipart upload', {
@@ -485,14 +485,13 @@ class SquareImageService {
       const item = itemResponse.data.object;
       const currentImageIds = item.item_data?.image_ids || [];
       
-      // 2. Add the new image ID if not already present
+      // 2. Add the new image ID if not already present (Square adds to end by default)
       if (!currentImageIds.includes(imageId)) {
-        // CRITICAL FIX: Make the new image PRIMARY by putting it FIRST in the array
         const updatedItem = {
           ...item,
           item_data: {
             ...item.item_data,
-            image_ids: [imageId, ...currentImageIds] // New image becomes primary (first)
+            image_ids: [...currentImageIds, imageId] // Add to end (Square's default behavior)
           }
         };
 
@@ -677,12 +676,11 @@ class SquareImageService {
         const currentData = itemResult.data_json ? JSON.parse(itemResult.data_json) : {};
         const currentImageIds = currentData.image_ids || [];
 
-        // Add the new image ID if not already present
+        // Add the new image ID if not already present (to end, matching Square's behavior)
         if (!currentImageIds.includes(imageId)) {
-          // CRITICAL FIX: Make the new image PRIMARY by putting it FIRST in the array
           const updatedData = {
             ...currentData,
-            image_ids: [imageId, ...currentImageIds] // New image becomes primary (first)
+            image_ids: [...currentImageIds, imageId] // Add to end (Square's default behavior)
           };
 
           // Update the item with new image_ids
@@ -729,7 +727,11 @@ class SquareImageService {
    */
   async reorderImages(itemId: string, newImageIds: string[]): Promise<SquareImageUploadResult> {
     try {
-      logger.info('SquareImageService', 'Starting image reorder to make image primary', { itemId, newImageIds });
+      logger.info('SquareImageService', 'Starting image reorder to make image primary', {
+        itemId,
+        newImageIds,
+        primaryImageId: newImageIds[0]
+      });
 
       // 1. First get the current item from Square to get the real image_ids order
       const itemResponse = await directSquareApi.retrieveCatalogObject(itemId, false);

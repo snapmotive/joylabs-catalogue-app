@@ -371,6 +371,13 @@ const SearchResultsArea = memo(({
       const reorderedImages = [selectedImage, ...currentImages];
       const imageIds = reorderedImages.map(img => img.id);
 
+      logger.info('SearchResultsArea', 'Making image primary - reordering images', {
+        selectedImageId: imageId,
+        currentOrder: currentImages.map(img => img.id),
+        newOrder: imageIds,
+        primaryImageId: imageIds[0]
+      });
+
       const result = await squareImageService.reorderImages(selectedItemForImageManagement.id, imageIds);
       if (!result.success) {
         throw new Error(result.error || 'Failed to reorder images');

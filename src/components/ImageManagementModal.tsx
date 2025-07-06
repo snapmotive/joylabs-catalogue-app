@@ -183,8 +183,15 @@ const ImageManagementModal: React.FC<ImageManagementModalProps> = ({
   // Handle making image primary
   const handleMakePrimary = async (imageId: string) => {
     if (!onImageMakePrimary) {
+      logger.warn('ImageManagementModal', 'No onImageMakePrimary handler provided');
       return;
     }
+
+    logger.info('ImageManagementModal', 'Making image primary', {
+      imageId,
+      currentImages: localImages.map(img => img.id),
+      currentPrimary: localImages[0]?.id
+    });
 
     setMakingPrimaryImageId(imageId);
     try {
