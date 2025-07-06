@@ -3,6 +3,42 @@
 ## Overview
 This document details the complete fix for the image management system that was plagued by multiple overlapping issues causing images to not appear in the ImageManagementModal after upload.
 
+## 🎯 Key Learnings Summary
+
+### 1. **Database Change Listener Chaos**
+- Multiple listeners firing simultaneously caused 5+ search executions within 100ms
+- **Solution**: Global notification disable/enable system during CRUD operations
+
+### 2. **Race Conditions Between Database and UI**
+- UI refreshing before database transactions completed
+- **Solution**: Disable notifications during operations, re-enable after completion
+
+### 3. **Cache Invalidation vs App Remounting**
+- Clearing Zustand store triggered hot reload and app remounting
+- **Solution**: Skip cache clearing - fresh database queries work fine
+
+### 4. **Modal State Management**
+- `selectedItemForImageManagement` never updated with fresh data after search refresh
+- **Solution**: Explicitly update modal state with fresh item data after search completes
+
+### 5. **The Critical Pattern**
+```typescript
+// 1. Disable notifications
+dataChangeNotifier.disable();
+
+// 2. Perform CRUD operation silently
+await uploadImage();
+
+// 3. Re-enable notifications
+dataChangeNotifier.enable();
+
+// 4. Refresh data
+await executeSearch();
+
+// 5. Update modal state with fresh data
+setSelectedItemForImageManagement(freshItem);
+```
+
 ## The Problem: Multiple Overlapping Issues
 
 ### Issue 1: Database Change Listener Chaos
@@ -149,5 +185,38 @@ INFO Updating selectedItemForImageManagement with fresh data {
 INFO [ImageManagementModal] Modal opened - preloading images { "count": 2 }
 ```
 
+## ⚠️ CRITICAL LESSON LEARNED: Zustand Store Clearing Causes App Remounting
+
+### The Final Issue: App Remounting During Image Upload
+After implementing the complete solution above, a new critical issue emerged:
+
+**Problem**: The `store.setProducts(updatedProducts)` call was triggering hot reload/app remounting (`iOS Bundled` messages), which destroyed all React state including `selectedItemForImageManagement`.
+
+**Symptoms**:
+- `iOS Bundled 243ms src/store/index.ts` messages during image upload
+- App completely remounting and losing all state
+- `selectedItemForImageManagement` reverting to original data with old image count
+- Images uploading successfully but modal never updating
+
+**Root Cause**: Clearing/modifying the Zustand store during development triggers React Native's hot reload mechanism, causing the entire app to remount and lose all component state.
+
+**Final Fix**:
+```typescript
+// WRONG - Causes app remounting
+const { useAppStore } = await import('../../../src/store');
+const store = useAppStore.getState();
+const updatedProducts = store.products.filter(p => p.id !== selectedItemForImageManagement.id);
+store.setProducts(updatedProducts); // ❌ Triggers hot reload
+
+// RIGHT - No store manipulation needed
+logger.info('SearchResultsArea', 'Skipping cache clear to prevent app remount - search will fetch fresh data');
+```
+
+### Key Insights:
+1. **Store manipulation during development can trigger hot reloads**
+2. **Cache invalidation isn't always necessary** - fresh database queries work fine
+3. **App remounting destroys ALL React state**, not just the component being updated
+4. **The `iOS Bundled` message is a critical warning sign** of unwanted app remounting
+
 ## Status: ✅ COMPLETELY FIXED
-All image upload operations now work correctly with proper UI updates and no race conditions.
+All image upload operations now work correctly with proper UI updates, no race conditions, and no app remounting issues.
