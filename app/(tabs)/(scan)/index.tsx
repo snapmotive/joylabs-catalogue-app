@@ -401,65 +401,54 @@ const SearchResultsArea = memo(({
     dataChangeNotifier.enable();
     logger.info('SearchResultsArea', 'Re-enabled database change notifications');
 
-    // CRITICAL FIX: Clear the item cache to force fresh data fetch with updated images
-    if (selectedItemForImageManagement) {
-      logger.info('SearchResultsArea', 'Clearing item cache to force fresh data with updated images', {
-        itemId: selectedItemForImageManagement.id
-      });
+    // DO NOT clear store cache as it causes app remounting
+    logger.info('SearchResultsArea', 'Skipping cache clear to prevent app remount - search will fetch fresh data');
 
-      // Clear the item from the store cache so it gets fresh data from DB
-      const { useAppStore } = await import('../../../src/store');
-      const store = useAppStore.getState();
-      const updatedProducts = store.products.filter((p: any) => p.id !== selectedItemForImageManagement.id);
-      store.setProducts(updatedProducts);
-
-      logger.info('SearchResultsArea', 'Item removed from cache, will be fetched fresh from database');
-    }
-
-    // Small delay to ensure any pending database operations complete, then refresh
-    setTimeout(async () => {
-      logger.info('SearchResultsArea', 'About to execute search refresh after image upload');
-      await executeSearch();
-
-      // CRITICAL FIX: Update selectedItemForImageManagement with fresh data
-      logger.info('SearchResultsArea', 'Checking selectedItemForImageManagement for update', {
-        hasSelectedItem: !!selectedItemForImageManagement,
-        selectedItemId: selectedItemForImageManagement?.id,
-        selectedItemImageCount: selectedItemForImageManagement?.images?.length || 0
-      });
-
-      if (selectedItemForImageManagement) {
-        logger.info('SearchResultsArea', 'About to call getProductById', {
-          itemId: selectedItemForImageManagement.id
+    // Execute search immediately, then update selectedItemForImageManagement
+    logger.info('SearchResultsArea', 'About to execute search refresh after image upload');
+    executeSearch().then(() => {
+      // CRITICAL FIX: Update selectedItemForImageManagement AFTER search completes
+      // This ensures it happens after any app remounting
+      setTimeout(async () => {
+        logger.info('SearchResultsArea', 'Post-search: Checking selectedItemForImageManagement for update', {
+          hasSelectedItem: !!selectedItemForImageManagement,
+          selectedItemId: selectedItemForImageManagement?.id,
+          selectedItemImageCount: selectedItemForImageManagement?.images?.length || 0
         });
 
-        const updatedItem = await getProductById(selectedItemForImageManagement.id);
-
-        logger.info('SearchResultsArea', 'getProductById result', {
-          itemId: selectedItemForImageManagement.id,
-          hasUpdatedItem: !!updatedItem,
-          updatedItemImageCount: updatedItem?.images?.length || 0,
-          updatedItemImageIds: updatedItem?.images?.map((img: any) => img.id) || []
-        });
-
-        if (updatedItem) {
-          logger.info('SearchResultsArea', 'Updating selectedItemForImageManagement with fresh data', {
-            itemId: selectedItemForImageManagement.id,
-            oldImageCount: selectedItemForImageManagement.images?.length || 0,
-            newImageCount: updatedItem.images?.length || 0
-          });
-
-          // Update the selected item with fresh data so modal gets updated images
-          setSelectedItemForImageManagement(updatedItem as SearchResultItem);
-        } else {
-          logger.error('SearchResultsArea', 'getProductById returned null - this is the problem!', {
+        if (selectedItemForImageManagement) {
+          logger.info('SearchResultsArea', 'Post-search: About to call getProductById', {
             itemId: selectedItemForImageManagement.id
           });
+
+          const updatedItem = await getProductById(selectedItemForImageManagement.id);
+
+          logger.info('SearchResultsArea', 'Post-search: getProductById result', {
+            itemId: selectedItemForImageManagement.id,
+            hasUpdatedItem: !!updatedItem,
+            updatedItemImageCount: updatedItem?.images?.length || 0,
+            updatedItemImageIds: updatedItem?.images?.map((img: any) => img.id) || []
+          });
+
+          if (updatedItem) {
+            logger.info('SearchResultsArea', 'Post-search: Updating selectedItemForImageManagement with fresh data', {
+              itemId: selectedItemForImageManagement.id,
+              oldImageCount: selectedItemForImageManagement.images?.length || 0,
+              newImageCount: updatedItem.images?.length || 0
+            });
+
+            // Update the selected item with fresh data so modal gets updated images
+            setSelectedItemForImageManagement(updatedItem as SearchResultItem);
+          } else {
+            logger.error('SearchResultsArea', 'Post-search: getProductById returned null!', {
+              itemId: selectedItemForImageManagement.id
+            });
+          }
+        } else {
+          logger.error('SearchResultsArea', 'Post-search: selectedItemForImageManagement is null!');
         }
-      } else {
-        logger.error('SearchResultsArea', 'selectedItemForImageManagement is null - this is the problem!');
-      }
-    }, 200);
+      }, 500); // Longer delay to ensure remount is complete
+    });
   }, [executeSearch, selectedItemForImageManagement]);
 
   // Real-time data change monitoring with proper debouncing and race condition prevention
