@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   SafeAreaView,
   Image,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -33,10 +34,17 @@ interface SimpleImagePickerProps {
   preSelectedImage?: string | null;
 }
 
-// FIXED CROP SIZE - NO MORE ORIENTATION BUGS
-const CROP_SIZE = 600; // Fixed size that works well on all devices
+// RESPONSIVE CROP SIZE - ENSURES 1:1 ASPECT RATIO ON ALL DEVICES
+const { width: screenWidth } = Dimensions.get('window');
 const HEADER_HEIGHT = 60;
 const SIDE_PADDING = 12;
+const BUTTON_HEIGHT = 60;
+const SPACING = 20;
+
+// Calculate crop size to fit screen while maintaining square aspect ratio
+const availableHeight = screenWidth - (HEADER_HEIGHT + BUTTON_HEIGHT + SPACING * 3);
+const availableWidth = screenWidth - (SIDE_PADDING * 2);
+const CROP_SIZE = Math.min(availableWidth, availableHeight, 600); // Max 600px, but responsive
 
 const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
   visible,
@@ -240,7 +248,7 @@ const SimpleImagePicker: React.FC<SimpleImagePickerProps> = ({
               height: boundedCropSize,
             },
           },
-          { resize: { width: 800, height: 800 } },
+          { resize: { width: 1200, height: 1200 } }, // High resolution for Square upload
         ],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );

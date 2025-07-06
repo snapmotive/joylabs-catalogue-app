@@ -422,8 +422,20 @@ const SearchResultsArea = memo(({
       await executeSearch();
 
       // CRITICAL FIX: Update selectedItemForImageManagement with fresh data
+      logger.info('SearchResultsArea', 'Checking selectedItemForImageManagement for update', {
+        hasSelectedItem: !!selectedItemForImageManagement,
+        selectedItemId: selectedItemForImageManagement?.id,
+        selectedItemImageCount: selectedItemForImageManagement?.images?.length || 0
+      });
+
       if (selectedItemForImageManagement) {
         const updatedItem = await getProductById(selectedItemForImageManagement.id);
+        logger.info('SearchResultsArea', 'getProductById result', {
+          itemId: selectedItemForImageManagement.id,
+          hasUpdatedItem: !!updatedItem,
+          updatedItemImageCount: updatedItem?.images?.length || 0
+        });
+
         if (updatedItem) {
           logger.info('SearchResultsArea', 'Updating selectedItemForImageManagement with fresh data', {
             itemId: selectedItemForImageManagement.id,
@@ -433,7 +445,13 @@ const SearchResultsArea = memo(({
 
           // Update the selected item with fresh data so modal gets updated images
           setSelectedItemForImageManagement(updatedItem as SearchResultItem);
+        } else {
+          logger.error('SearchResultsArea', 'getProductById returned null - this is the problem!', {
+            itemId: selectedItemForImageManagement.id
+          });
         }
+      } else {
+        logger.error('SearchResultsArea', 'selectedItemForImageManagement is null - this is the problem!');
       }
     }, 200);
   }, [executeSearch, selectedItemForImageManagement]);
